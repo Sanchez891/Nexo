@@ -118,6 +118,15 @@ export const WhatsAppSimulator: React.FC = () => {
 
   // Multi-step booking state
   const [bookingState, setBookingState] = useState<BookingState>({});
+  // Este chat encadena pasos vía setTimeout/handlers que se definen en el
+  // render en que se los llama, así que si leyeran `bookingState` del closure
+  // del componente podrían ver una versión vieja (previa a los últimos
+  // setBookingState). Un ref siempre-actualizado evita ese problema —
+  // reemplaza toda lectura de bookingStateRef.current.<campo> dentro de callbacks.
+  const bookingStateRef = useRef<BookingState>({});
+  useEffect(() => {
+    bookingStateRef.current = bookingState;
+  }, [bookingState]);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
 
   // Format current time HH:MM
@@ -459,7 +468,7 @@ export const WhatsAppSimulator: React.FC = () => {
       variant: 'outline',
       action: () => {
         addUserMessage('Volver');
-        askPreferenciaHoraria(bookingState.pacienteNombre || 'el paciente');
+        askPreferenciaHoraria(bookingStateRef.current.pacienteNombre || 'el paciente');
       },
     });
 
@@ -599,8 +608,8 @@ export const WhatsAppSimulator: React.FC = () => {
       horaSeleccionada: undefined,
     }));
 
-    const servicioNombre = bookingState.servicioNombre || 'Traumatología';
-    const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
+    const servicioNombre = bookingStateRef.current.servicioNombre || 'Traumatología';
+    const tipoAgenda = bookingStateRef.current.tipoAgenda || 'PROFESIONAL';
 
     setTimeout(() => {
       askSeleccionDia(servicioNombre, docName, tipoAgenda);
@@ -695,7 +704,7 @@ export const WhatsAppSimulator: React.FC = () => {
   };
 
   const askSeleccionDia = async (servicioNombre: string, docName?: string, tipoAgenda: TipoAgenda = 'PROFESIONAL') => {
-    const prefHoraria = bookingState.preferenciaHoraria || 'manana';
+    const prefHoraria = bookingStateRef.current.preferenciaHoraria || 'manana';
     const realSlots = await fetchRealSlots(servicioNombre, docName, tipoAgenda);
     const eligibleDays = groupSlotsByDay(realSlots, prefHoraria);
 
@@ -718,7 +727,7 @@ export const WhatsAppSimulator: React.FC = () => {
             variant: 'outline',
             action: () => {
               addUserMessage('Cambiar horario');
-              askPreferenciaHoraria(bookingState.pacienteNombre || 'el paciente');
+              askPreferenciaHoraria(bookingStateRef.current.pacienteNombre || 'el paciente');
             },
           },
           {
@@ -821,10 +830,10 @@ export const WhatsAppSimulator: React.FC = () => {
     shortLabel: string,
     showAll: boolean = false
   ) => {
-    const servicioNombre = bookingState.servicioNombre || 'Traumatología';
-    const prefHoraria = bookingState.preferenciaHoraria || 'manana';
-    const docPref = bookingState.profesionalPreferido;
-    const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
+    const servicioNombre = bookingStateRef.current.servicioNombre || 'Traumatología';
+    const prefHoraria = bookingStateRef.current.preferenciaHoraria || 'manana';
+    const docPref = bookingStateRef.current.profesionalPreferido;
+    const tipoAgenda = bookingStateRef.current.tipoAgenda || 'PROFESIONAL';
 
     const realSlots = await fetchRealSlots(servicioNombre, docPref, tipoAgenda);
     const filtered = filterByPreferenciaHoraria(realSlots as unknown as AvailableSlot[], prefHoraria) as unknown as WaSlot[];
@@ -942,8 +951,8 @@ export const WhatsAppSimulator: React.FC = () => {
     // Step 7: RESUMEN ANTES DE CONFIRMAR (DO NOT CREATE YET)
     setTimeout(() => {
       presentResumenTurno({
-        pacienteNombre: bookingState.pacienteNombre || 'Sofía Gómez',
-        servicioNombre: bookingState.servicioNombre || 'Traumatología',
+        pacienteNombre: bookingStateRef.current.pacienteNombre || 'Sofía Gómez',
+        servicioNombre: bookingStateRef.current.servicioNombre || 'Traumatología',
         profesional: slot.profesional,
         fechaLabel: slot.dayLabel,
         fecha: slot.fecha,
@@ -982,9 +991,9 @@ export const WhatsAppSimulator: React.FC = () => {
           variant: 'outline',
           action: () => {
             addUserMessage('Elegir otro horario');
-            if (!bookingState.fechaSeleccionada) return;
-            const shortLabel = bookingState.fechaLabel?.split(' de ')[0] || bookingState.fechaSeleccionada;
-            presentAvailableSlotsForDay(bookingState.fechaSeleccionada, bookingState.fechaLabel || bookingState.fechaSeleccionada, shortLabel);
+            if (!bookingStateRef.current.fechaSeleccionada) return;
+            const shortLabel = bookingStateRef.current.fechaLabel?.split(' de ')[0] || bookingStateRef.current.fechaSeleccionada;
+            presentAvailableSlotsForDay(bookingStateRef.current.fechaSeleccionada, bookingStateRef.current.fechaLabel || bookingStateRef.current.fechaSeleccionada, shortLabel);
           },
         },
         {
@@ -993,7 +1002,7 @@ export const WhatsAppSimulator: React.FC = () => {
           variant: 'outline',
           action: () => {
             addUserMessage('Modificar datos');
-            askPreferenciaHoraria(bookingState.pacienteNombre || 'el paciente');
+            askPreferenciaHoraria(bookingStateRef.current.pacienteNombre || 'el paciente');
           },
         },
         {
@@ -1016,9 +1025,9 @@ export const WhatsAppSimulator: React.FC = () => {
   const handleFinalConfirmBooking = async () => {
     addUserMessage('Confirmar turno');
 
-    const fecha = bookingState.fechaSeleccionada || '';
-    const pacienteId = bookingState.pacienteId;
-    const slotId = bookingState.slotId;
+    const fecha = bookingStateRef.current.fechaSeleccionada || '';
+    const pacienteId = bookingStateRef.current.pacienteId;
+    const slotId = bookingStateRef.current.slotId;
 
     if (!pacienteId || !slotId) {
       addBotMessage('Faltan datos para confirmar el turno. Volvamos a empezar la solicitud.', 'MENU_PRINCIPAL', [
@@ -1109,7 +1118,7 @@ export const WhatsAppSimulator: React.FC = () => {
           paciente: apt.pacienteNombre,
           servicio: apt.especialidad,
           profesional: apt.profesional,
-          fechaLabel: bookingState.fechaLabel || `${apt.fecha}`,
+          fechaLabel: bookingStateRef.current.fechaLabel || `${apt.fecha}`,
           fecha: apt.fecha,
           hora: apt.hora,
           codigo: apt.codigo,
@@ -1126,8 +1135,8 @@ export const WhatsAppSimulator: React.FC = () => {
   // ============================================================================
   const handlePromptWaitlist = () => {
     addUserMessage('Ingresar a lista de espera');
-    const paciente = bookingState.pacienteNombre || 'Sofía Gómez';
-    const servicio = bookingState.servicioNombre || 'Traumatología';
+    const paciente = bookingStateRef.current.pacienteNombre || 'Sofía Gómez';
+    const servicio = bookingStateRef.current.servicioNombre || 'Traumatología';
 
     addBotMessage(
       `Puedo registrar a ${paciente} en la lista de espera de ${servicio}. Si se libera un turno compatible, podremos avisarte automáticamente para asignarlo.`,
@@ -1160,11 +1169,11 @@ export const WhatsAppSimulator: React.FC = () => {
 
   const handleConfirmWaitlist = async () => {
     addUserMessage('Confirmar ingreso a lista de espera');
-    const paciente = bookingState.pacienteNombre || 'el paciente';
-    const servicio = bookingState.servicioNombre || 'Traumatología';
-    const prefHoraria = bookingState.preferenciaHoraria || 'manana';
+    const paciente = bookingStateRef.current.pacienteNombre || 'el paciente';
+    const servicio = bookingStateRef.current.servicioNombre || 'Traumatología';
+    const prefHoraria = bookingStateRef.current.preferenciaHoraria || 'manana';
 
-    if (!bookingState.pacienteId) {
+    if (!bookingStateRef.current.pacienteId) {
       addBotMessage('No pude identificar al paciente para anotarlo en la lista de espera. Empecemos de nuevo.', 'MENU_PRINCIPAL', [
         { id: 'btn-error-wl-reintentar', label: 'Reintentar solicitud', action: () => handleStartSolicitud() },
       ]);
@@ -1172,7 +1181,7 @@ export const WhatsAppSimulator: React.FC = () => {
     }
 
     const entry = await addToWaitlist({
-      pacienteId: bookingState.pacienteId,
+      pacienteId: bookingStateRef.current.pacienteId,
       tutorId: currentTutor.id,
       especialidad: servicio,
       preferenciaHorario: prefHoraria,
@@ -1646,7 +1655,7 @@ export const WhatsAppSimulator: React.FC = () => {
         handleSelectProfesional('Me da igual');
         return;
       }
-      const servicioNombre = bookingState.servicioNombre || '';
+      const servicioNombre = bookingStateRef.current.servicioNombre || '';
       const docsDelServicio = doctors.filter((d) => d.especialidad.toLowerCase() === servicioNombre.toLowerCase());
       const matchDoc = docsDelServicio.find((d) => {
         const apellido = d.nombre.split(' ').slice(-1)[0]?.toLowerCase();
@@ -1660,10 +1669,10 @@ export const WhatsAppSimulator: React.FC = () => {
 
     if (currentStep === 'SELECCION_DIA') {
       (async () => {
-        const servicioNombre = bookingState.servicioNombre || '';
-        const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
-        const prefHoraria = bookingState.preferenciaHoraria || 'manana';
-        const realSlots = await fetchRealSlots(servicioNombre, bookingState.profesionalPreferido, tipoAgenda);
+        const servicioNombre = bookingStateRef.current.servicioNombre || '';
+        const tipoAgenda = bookingStateRef.current.tipoAgenda || 'PROFESIONAL';
+        const prefHoraria = bookingStateRef.current.preferenciaHoraria || 'manana';
+        const realSlots = await fetchRealSlots(servicioNombre, bookingStateRef.current.profesionalPreferido, tipoAgenda);
         const eligibleDays = groupSlotsByDay(realSlots, prefHoraria);
         if (eligibleDays.length === 0) return;
 
@@ -1678,11 +1687,11 @@ export const WhatsAppSimulator: React.FC = () => {
 
     if (currentStep === 'SELECCION_HORARIO') {
       (async () => {
-        const servicioNombre = bookingState.servicioNombre || '';
-        const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
-        const fecha = bookingState.fechaSeleccionada;
+        const servicioNombre = bookingStateRef.current.servicioNombre || '';
+        const tipoAgenda = bookingStateRef.current.tipoAgenda || 'PROFESIONAL';
+        const fecha = bookingStateRef.current.fechaSeleccionada;
         if (!fecha) return;
-        const realSlots = await fetchRealSlots(servicioNombre, bookingState.profesionalPreferido, tipoAgenda);
+        const realSlots = await fetchRealSlots(servicioNombre, bookingStateRef.current.profesionalPreferido, tipoAgenda);
         const slotsDelDia = realSlots.filter((s) => s.fecha === fecha);
         const matchSlot = slotsDelDia.find((s) => lower.includes(s.hora)) || (slotsDelDia.length === 1 ? slotsDelDia[0] : undefined);
         if (matchSlot) {
