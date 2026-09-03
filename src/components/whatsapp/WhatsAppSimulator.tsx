@@ -21,6 +21,8 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { Appointment, Localidad, TipoAgenda, TipoPrestacion, UserRole } from '../../types';
+import { AvailableSlot, filterByPreferenciaHoraria, getSlotsDisponibles } from '../../services/agenda.service';
+import { realProfesionalId } from '../../services/professionals.service';
 
 type FlowStep =
   | 'MENU_PRINCIPAL'
@@ -81,6 +83,7 @@ interface BookingState {
   horaSeleccionada?: string; // HH:MM
   profesionalFinal?: string;
   consultorio?: string;
+  slotId?: string;
   appointmentToCancel?: Appointment;
   appointmentToReschedule?: Appointment;
   confirmedAppointment?: Appointment;
@@ -607,142 +610,94 @@ export const WhatsAppSimulator: React.FC = () => {
   // ============================================================================
   // SOLICITAR TURNO: STEP 5 - SELECCIÓN DEL DÍA
   // ============================================================================
-  // Helper to compute available days based on current filters
-  const computeAvailableDays = (
+  const dayNamesWA = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  const monthNamesWA = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+  ];
+  const formatDateLabelWA = (dateStr: string) => {
+    const d = new Date(`${dateStr}T00:00:00`);
+    const dow = d.getDay();
+    return {
+      label: `${dayNamesWA[dow]} ${d.getDate()} de ${monthNamesWA[d.getMonth()]}`,
+      shortLabel: `${dayNamesWA[dow]} ${d.getDate()}`,
+    };
+  };
+
+  type WaSlot = {
+    fecha: string;
+    dayLabel: string;
+    hora: string;
+    profesional: string;
+    profesionalId?: string;
+    slotId: string;
+    consultorio: string;
+    tipoAgenda: TipoAgenda;
+  };
+
+  // Consulta real a agenda_slots (Supabase) para el servicio/profesional del
+  // booking en curso. Se cachea por servicio+profesional dentro del state.
+  const slotsFetchCache = useRef<Map<string, AvailableSlot[]>>(new Map());
+
+  const fetchRealSlots = async (
     servicioNombre: string,
-    prefHoraria: 'manana' | 'tarde' | 'cualquiera',
     docPref?: string,
     tipoAgenda: TipoAgenda = 'PROFESIONAL'
-  ) => {
-    const activeAppointments = appointments.filter((a) => a.estado !== 'CANCELADO');
+  ): Promise<WaSlot[]> => {
+    const servicio = specialties.find((s) => s.nombre.toLowerCase() === servicioNombre.toLowerCase());
+    if (!servicio) return [];
 
-    // List of candidate days within 30 days starting from baseline 2026-09-09
-    const candidateDays = [
-      { date: '2026-09-09', label: 'Miércoles 9 de septiembre', shortLabel: 'Miércoles 9' },
-      { date: '2026-09-10', label: 'Jueves 10 de septiembre', shortLabel: 'Jueves 10' },
-      { date: '2026-09-11', label: 'Viernes 11 de septiembre', shortLabel: 'Viernes 11' },
-      { date: '2026-09-14', label: 'Lunes 14 de septiembre', shortLabel: 'Lunes 14' },
-      { date: '2026-09-15', label: 'Martes 15 de septiembre', shortLabel: 'Martes 15' },
-      { date: '2026-09-16', label: 'Miércoles 16 de septiembre', shortLabel: 'Miércoles 16' },
-      { date: '2026-09-17', label: 'Jueves 17 de septiembre', shortLabel: 'Jueves 17' },
-      { date: '2026-09-18', label: 'Viernes 18 de septiembre', shortLabel: 'Viernes 18' },
-    ];
+    const profesionalRealId =
+      tipoAgenda === 'PROFESIONAL' && docPref && docPref !== 'Me da igual' && docPref !== 'Se asignará al momento de la atención'
+        ? (() => {
+            const doc = doctors.find((d) => d.nombre === docPref && d.especialidad.toLowerCase() === servicioNombre.toLowerCase());
+            return doc ? realProfesionalId(doc.id) : undefined;
+          })()
+        : undefined;
 
-    const eligibleDays = candidateDays
-      .map((d) => {
-        const slots = computeAvailableSlots(
-          d.date,
-          d.label,
-          servicioNombre,
-          prefHoraria,
-          docPref,
-          tipoAgenda,
-          activeAppointments
-        );
-        return {
-          ...d,
-          availableSlotsCount: slots.length,
-          slots,
-        };
-      })
-      .filter((d) => d.availableSlotsCount > 0);
+    const cacheKey = `${servicio.id}::${profesionalRealId || 'ANY'}`;
+    let raw = slotsFetchCache.current.get(cacheKey);
+    if (!raw) {
+      raw = await getSlotsDisponibles({ servicioId: servicio.id, profesionalId: profesionalRealId, tipoAgenda });
+      slotsFetchCache.current.set(cacheKey, raw);
+    }
 
-    return eligibleDays;
+    return raw.map((s) => ({
+      fecha: s.fecha,
+      dayLabel: formatDateLabelWA(s.fecha).label,
+      hora: s.hora,
+      profesional: s.profesional,
+      profesionalId: s.profesionalId,
+      slotId: s.slotId,
+      consultorio: s.consultorio,
+      tipoAgenda: s.tipoAgenda,
+    }));
   };
 
-  // Helper to compute available slots for a specific day
-  const computeAvailableSlots = (
-    dateStr: string,
-    dateLabel: string,
-    servicioNombre: string,
-    prefHoraria: 'manana' | 'tarde' | 'cualquiera',
-    docPref?: string,
-    tipoAgenda: TipoAgenda = 'PROFESIONAL',
-    activeAppointments: Appointment[] = appointments.filter((a) => a.estado !== 'CANCELADO')
-  ) => {
-    // Determine active doctors for this specialty
-    const specialtyDocs = doctors.filter(
-      (d) => d.especialidad.toLowerCase() === servicioNombre.toLowerCase() && !d.ausente
-    );
-
-    let targetDoctors = specialtyDocs;
-    if (docPref && docPref !== 'Me da igual' && docPref !== 'Se asignará al momento de la atención') {
-      targetDoctors = specialtyDocs.filter(
-        (d) => d.nombre.toLowerCase() === docPref.toLowerCase()
-      );
-    }
-
-    // Default template hours for pediatric attention
-    let baseHours = ['08:30', '09:00', '09:45', '10:30', '11:15', '12:00', '12:45', '13:30', '14:15'];
-
-    if (prefHoraria === 'manana') {
-      baseHours = baseHours.filter((h) => parseInt(h.split(':')[0], 10) < 13);
-    } else if (prefHoraria === 'tarde') {
-      baseHours = baseHours.filter((h) => parseInt(h.split(':')[0], 10) >= 13);
-    }
-
-    const available: Array<{
-      fecha: string;
-      dayLabel: string;
-      hora: string;
-      profesional: string;
-      profesionalId?: string;
-      consultorio: string;
-      tipoAgenda: TipoAgenda;
-    }> = [];
-
-    if (tipoAgenda === 'SERVICIO') {
-      for (const h of baseHours) {
-        const occupiedCount = activeAppointments.filter(
-          (a) =>
-            a.fecha === dateStr &&
-            a.hora === h &&
-            a.especialidad.toLowerCase() === servicioNombre.toLowerCase()
-        ).length;
-
-        if (occupiedCount < 2) {
-          available.push({
-            fecha: dateStr,
-            dayLabel: dateLabel,
-            hora: h,
-            profesional: 'Se asignará al momento de la atención',
-            consultorio: 'Consultorio de Servicio',
-            tipoAgenda: 'SERVICIO',
-          });
-        }
-      }
-    } else {
-      for (const doc of targetDoctors) {
-        for (const h of baseHours) {
-          const isOccupied = activeAppointments.some(
-            (a) =>
-              a.fecha === dateStr &&
-              a.hora === h &&
-              a.profesional.toLowerCase() === doc.nombre.toLowerCase()
-          );
-
-          if (!isOccupied) {
-            available.push({
-              fecha: dateStr,
-              dayLabel: dateLabel,
-              hora: h,
-              profesional: doc.nombre,
-              profesionalId: doc.id,
-              consultorio: doc.consultorio,
-              tipoAgenda: 'PROFESIONAL',
-            });
-          }
-        }
-      }
-    }
-
-    // Sort chronologically
-    return available.sort((a, b) => a.hora.localeCompare(b.hora));
+  // Agrupa por día los slots reales, filtrando por preferencia horaria
+  const groupSlotsByDay = (slots: WaSlot[], prefHoraria: 'manana' | 'tarde' | 'cualquiera') => {
+    const filtered = filterByPreferenciaHoraria(slots as unknown as AvailableSlot[], prefHoraria) as unknown as WaSlot[];
+    const byDate = new Map<string, WaSlot[]>();
+    filtered.forEach((s) => {
+      const arr = byDate.get(s.fecha) || [];
+      arr.push(s);
+      byDate.set(s.fecha, arr);
+    });
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, daySlots]) => ({
+        date,
+        label: daySlots[0].dayLabel,
+        shortLabel: formatDateLabelWA(date).shortLabel,
+        availableSlotsCount: daySlots.length,
+        slots: daySlots.sort((a, b) => a.hora.localeCompare(b.hora)),
+      }));
   };
 
-  const askSeleccionDia = (servicioNombre: string, docName?: string, tipoAgenda: TipoAgenda = 'PROFESIONAL') => {
+  const askSeleccionDia = async (servicioNombre: string, docName?: string, tipoAgenda: TipoAgenda = 'PROFESIONAL') => {
     const prefHoraria = bookingState.preferenciaHoraria || 'manana';
-    const eligibleDays = computeAvailableDays(servicioNombre, prefHoraria, docName, tipoAgenda);
+    const realSlots = await fetchRealSlots(servicioNombre, docName, tipoAgenda);
+    const eligibleDays = groupSlotsByDay(realSlots, prefHoraria);
 
     if (eligibleDays.length === 0) {
       // NO AVAILABILITY FOUND
@@ -800,7 +755,7 @@ export const WhatsAppSimulator: React.FC = () => {
       id: `btn-dia-${d.date}`,
       label: d.shortLabel,
       sublabel: `${d.availableSlotsCount} horarios disponibles`,
-      variant: d.date === '2026-09-09' ? 'primary' : 'outline',
+      variant: d.date === eligibleDays[0].date ? 'primary' : 'outline',
       action: () => handleSelectDia(d.date, d.label, d.shortLabel),
     }));
 
@@ -860,7 +815,7 @@ export const WhatsAppSimulator: React.FC = () => {
   // ============================================================================
   // SOLICITAR TURNO: STEP 6 - HORARIOS DISPONIBLES
   // ============================================================================
-  const presentAvailableSlotsForDay = (
+  const presentAvailableSlotsForDay = async (
     dateStr: string,
     dateLabel: string,
     shortLabel: string,
@@ -871,14 +826,9 @@ export const WhatsAppSimulator: React.FC = () => {
     const docPref = bookingState.profesionalPreferido;
     const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
 
-    const slots = computeAvailableSlots(
-      dateStr,
-      dateLabel,
-      servicioNombre,
-      prefHoraria,
-      docPref,
-      tipoAgenda
-    );
+    const realSlots = await fetchRealSlots(servicioNombre, docPref, tipoAgenda);
+    const filtered = filterByPreferenciaHoraria(realSlots as unknown as AvailableSlot[], prefHoraria) as unknown as WaSlot[];
+    const slots = filtered.filter((s) => s.fecha === dateStr).sort((a, b) => a.hora.localeCompare(b.hora));
 
     if (slots.length === 0) {
       addBotMessage(
@@ -914,8 +864,8 @@ export const WhatsAppSimulator: React.FC = () => {
     // Display initial up to 3 options or all if requested
     const visibleSlots = showAll ? slots : slots.slice(0, 3);
 
-    const slotButtons: ButtonOption[] = visibleSlots.map((s) => {
-      const isCanonical = s.hora === '10:30' && s.profesional.includes('Laura Gómez');
+    const slotButtons: ButtonOption[] = visibleSlots.map((s, idx) => {
+      const isCanonical = idx === 0;
       return {
         id: `btn-slot-${s.hora}-${s.profesional.replace(/\s+/g, '-')}`,
         label: `${s.hora} hs - ${s.profesional}`,
@@ -975,15 +925,7 @@ export const WhatsAppSimulator: React.FC = () => {
     );
   };
 
-  const handleSelectSlot = (slot: {
-    fecha: string;
-    dayLabel: string;
-    hora: string;
-    profesional: string;
-    profesionalId?: string;
-    consultorio: string;
-    tipoAgenda: TipoAgenda;
-  }) => {
+  const handleSelectSlot = (slot: WaSlot) => {
     addUserMessage(`${slot.hora} hs - ${slot.profesional}`);
 
     setBookingState((prev) => ({
@@ -994,6 +936,7 @@ export const WhatsAppSimulator: React.FC = () => {
       profesionalFinal: slot.profesional,
       profesionalId: slot.profesionalId,
       consultorio: slot.consultorio,
+      slotId: slot.slotId,
     }));
 
     // Step 7: RESUMEN ANTES DE CONFIRMAR (DO NOT CREATE YET)
@@ -1039,12 +982,9 @@ export const WhatsAppSimulator: React.FC = () => {
           variant: 'outline',
           action: () => {
             addUserMessage('Elegir otro horario');
-            const shortLabel = bookingState.fechaLabel?.split(' de ')[0] || 'Miércoles 9';
-            presentAvailableSlotsForDay(
-              bookingState.fechaSeleccionada || '2026-09-09',
-              bookingState.fechaLabel || 'Miércoles 9 de septiembre',
-              shortLabel
-            );
+            if (!bookingState.fechaSeleccionada) return;
+            const shortLabel = bookingState.fechaLabel?.split(' de ')[0] || bookingState.fechaSeleccionada;
+            presentAvailableSlotsForDay(bookingState.fechaSeleccionada, bookingState.fechaLabel || bookingState.fechaSeleccionada, shortLabel);
           },
         },
         {
@@ -1073,68 +1013,27 @@ export const WhatsAppSimulator: React.FC = () => {
   // ============================================================================
   // SOLICITAR TURNO: STEP 8 - VALIDACIÓN FINAL & CONFIRMACIÓN EN AGENDA CENTRAL
   // ============================================================================
-  const handleFinalConfirmBooking = () => {
+  const handleFinalConfirmBooking = async () => {
     addUserMessage('Confirmar turno');
 
-    const fecha = bookingState.fechaSeleccionada || '2026-09-09';
-    const hora = bookingState.horaSeleccionada || '10:30';
-    const profesional = bookingState.profesionalFinal || 'Dra. Laura Gómez';
-    const servicio = bookingState.servicioNombre || 'Traumatología';
-    const pacienteNombre = bookingState.pacienteNombre || 'Sofía Gómez';
-    const pacienteEdad = bookingState.pacienteEdad || 12;
-    const pacienteId = bookingState.pacienteId || 'p-sofia';
+    const fecha = bookingState.fechaSeleccionada || '';
+    const pacienteId = bookingState.pacienteId;
+    const slotId = bookingState.slotId;
 
-    // 1. Anti-collision check right before inserting
-    const active = appointments.filter((a) => a.estado !== 'CANCELADO');
-    const isOccupied = active.some(
-      (a) =>
-        a.fecha === fecha &&
-        a.hora === hora &&
-        a.profesional.toLowerCase() === profesional.toLowerCase()
-    );
-
-    if (isOccupied) {
-      addBotMessage(
-        'Ese horario acaba de ser reservado. Te muestro las opciones que continúan disponibles.',
-        'SELECCION_HORARIO',
-        [
-          {
-            id: 'btn-ver-alternativas-ocupado',
-            label: 'Ver horarios disponibles',
-            variant: 'primary',
-            action: () => {
-              const shortLabel = bookingState.fechaLabel?.split(' de ')[0] || 'Miércoles 9';
-              presentAvailableSlotsForDay(
-                fecha,
-                bookingState.fechaLabel || 'Miércoles 9 de septiembre',
-                shortLabel
-              );
-            },
-          },
-        ]
-      );
+    if (!pacienteId || !slotId) {
+      addBotMessage('Faltan datos para confirmar el turno. Volvamos a empezar la solicitud.', 'MENU_PRINCIPAL', [
+        { id: 'btn-error-reintentar-datos', label: 'Reintentar solicitud', action: () => handleStartSolicitud() },
+      ]);
       return;
     }
 
-    // 2. Real central booking via HospitalContext!
-    const result = bookAppointment({
+    // Reserva atómica real vía reservar_turno() en Supabase — misma función
+    // que usa el portal Web. Si el slot ya fue tomado, el error llega acá.
+    const result = await bookAppointment({
+      slotId,
       pacienteId,
-      pacienteNombre,
-      pacienteEdad,
-      pacienteLocalidad: currentTutor.localidad,
       tutorSolicitanteId: currentTutor.id,
-      tutorSolicitanteNombre: `${currentTutor.nombre} ${currentTutor.apellido}`,
-      tutorSolicitanteRelacion: 'Madre',
-      tutorSolicitanteTelefono: currentTutor.telefono,
-      tipoPrestacion: bookingState.tipoPrestacion || 'consulta_medica',
-      tipoAgenda: bookingState.tipoAgenda || 'PROFESIONAL',
-      especialidad: servicio,
-      profesional,
-      fecha,
-      hora,
-      origenCanal: 'whatsapp', // Marked as whatsapp origin!
-      tieneDerivacion: true,
-      tipoConsulta: 'Primera consulta',
+      origenCanal: 'whatsapp',
       motivoResumido: 'Atención pediátrica solicitada mediante asistente de WhatsApp',
     });
 
@@ -1168,7 +1067,7 @@ export const WhatsAppSimulator: React.FC = () => {
           variant: 'primary',
           action: () => {
             // Jump directly to Secretario/Administrativo agenda to show jury the new appointment!
-            setRole('secretario');
+            setRole('administrativo');
             closeWhatsAppSimulator();
           },
         },
@@ -1259,28 +1158,25 @@ export const WhatsAppSimulator: React.FC = () => {
     );
   };
 
-  const handleConfirmWaitlist = () => {
+  const handleConfirmWaitlist = async () => {
     addUserMessage('Confirmar ingreso a lista de espera');
-    const paciente = bookingState.pacienteNombre || 'Sofía Gómez';
+    const paciente = bookingState.pacienteNombre || 'el paciente';
     const servicio = bookingState.servicioNombre || 'Traumatología';
-    const edad = bookingState.pacienteEdad || 12;
     const prefHoraria = bookingState.preferenciaHoraria || 'manana';
 
-    const entry = addToWaitlist({
-      pacienteId: bookingState.pacienteId || 'p-sofia',
-      pacienteNombre: paciente,
-      dni: '48.912.304',
-      edad,
+    if (!bookingState.pacienteId) {
+      addBotMessage('No pude identificar al paciente para anotarlo en la lista de espera. Empecemos de nuevo.', 'MENU_PRINCIPAL', [
+        { id: 'btn-error-wl-reintentar', label: 'Reintentar solicitud', action: () => handleStartSolicitud() },
+      ]);
+      return;
+    }
+
+    const entry = await addToWaitlist({
+      pacienteId: bookingState.pacienteId,
+      tutorId: currentTutor.id,
       especialidad: servicio,
-      tipoPrestacion: bookingState.tipoPrestacion || 'consulta_medica',
-      localidad: currentTutor.localidad,
       preferenciaHorario: prefHoraria,
-      prioridad: currentTutor.localidad === 'Mercedes' ? 'alta' : 'normal',
-      telefono: currentTutor.telefono,
-      motivo: 'Solicitud mediante WhatsApp Bot por falta de cupos en agenda',
-      tutorResponsableId: currentTutor.id,
-      tutorResponsableNombre: `${currentTutor.nombre} ${currentTutor.apellido}`,
-      tutorResponsableTelefono: currentTutor.telefono,
+      localidad: currentTutor.localidad,
       origenCanal: 'whatsapp',
     });
 
@@ -1293,7 +1189,7 @@ export const WhatsAppSimulator: React.FC = () => {
           label: 'Ver en Panel Administrativo',
           variant: 'primary',
           action: () => {
-            setRole('secretario');
+            setRole('administrativo');
             closeWhatsAppSimulator();
           },
         },
@@ -1477,12 +1373,12 @@ export const WhatsAppSimulator: React.FC = () => {
     );
   };
 
-  const handleExecuteCancellation = (apt: Appointment) => {
+  const handleExecuteCancellation = async (apt: Appointment) => {
     addUserMessage('Sí, cancelar');
 
-    // Real business operation: cancelAppointment updates state to CANCELADO,
-    // frees slot in agenda, and triggers waitlist release alert!
-    cancelAppointment(apt.id, 'Cancelado desde WhatsApp por el tutor responsable');
+    // Operación real: cancelar_turno() en Supabase libera el slot y dispara
+    // la búsqueda de candidatos compatibles en lista de espera.
+    await cancelAppointment(apt.id, 'Cancelado desde WhatsApp por el tutor responsable');
 
     addBotMessage(
       `El turno de ${apt.pacienteNombre} fue cancelado correctamente.\n\nEl horario (${apt.fecha} a las ${apt.hora} hs) ha sido liberado en la agenda central y el sistema ya notificó a la lista de espera de ${apt.especialidad}.`,
@@ -1494,7 +1390,7 @@ export const WhatsAppSimulator: React.FC = () => {
           badge: 'Cupo liberado',
           variant: 'primary',
           action: () => {
-            setRole('secretario');
+            setRole('administrativo');
             closeWhatsAppSimulator();
           },
         },
@@ -1549,10 +1445,11 @@ export const WhatsAppSimulator: React.FC = () => {
       label: `${a.pacienteNombre} • ${a.especialidad}`,
       sublabel: `${a.fecha} a las ${a.hora} hs`,
       variant: 'primary',
-      action: () => {
+      action: async () => {
         addUserMessage(`Reprogramar ${a.pacienteNombre} (${a.especialidad})`);
-        // Cancel old, start new for same child and specialty
-        cancelAppointment(a.id, 'Reprogramación solicitada vía WhatsApp');
+        // Cancela el turno anterior (libera el slot) y arranca una nueva
+        // solicitud guiada para el mismo paciente/servicio.
+        await cancelAppointment(a.id, 'Reprogramación solicitada vía WhatsApp');
         setBookingState({
           pacienteNombre: a.pacienteNombre,
           pacienteId: a.pacienteId,
@@ -1687,16 +1584,14 @@ export const WhatsAppSimulator: React.FC = () => {
 
     // 6. Context-aware step matching
     if (currentStep === 'PERSONA_A_CARGO') {
-      if (lower.includes('sofia') || lower.includes('sofía')) {
-        handleSelectPersona('Sofía Gómez', 'p-sofia', 12);
-        return;
-      }
-      if (lower.includes('lucas')) {
-        handleSelectPersona('Lucas Gómez', 'p1', 8);
-        return;
-      }
-      if (lower.includes('martin') || lower.includes('martín')) {
-        handleSelectPersona('Martín Pérez', 'p-martin', 6);
+      const match = personasACargo.find((rel) => {
+        const p = rel.paciente || rel;
+        const primerNombre = (p.nombre || '').toLowerCase().split(' ')[0];
+        return primerNombre && lower.includes(primerNombre);
+      });
+      if (match) {
+        const p = match.paciente || match;
+        handleSelectPersona(p.nombre, p.id, p.edad);
         return;
       }
     }
@@ -1747,58 +1642,54 @@ export const WhatsAppSimulator: React.FC = () => {
     }
 
     if (currentStep === 'PROFESIONAL') {
-      if (lower.includes('laura') || lower.includes('gomez') || lower.includes('gómez')) {
-        handleSelectProfesional('Dra. Laura Gómez');
-        return;
-      }
-      if (lower.includes('martin') || lower.includes('martín') || lower.includes('fernandez')) {
-        handleSelectProfesional('Dr. Martín Fernández');
-        return;
-      }
       if (lower.includes('igual') || lower.includes('cualquiera') || lower.includes('no')) {
         handleSelectProfesional('Me da igual');
+        return;
+      }
+      const servicioNombre = bookingState.servicioNombre || '';
+      const docsDelServicio = doctors.filter((d) => d.especialidad.toLowerCase() === servicioNombre.toLowerCase());
+      const matchDoc = docsDelServicio.find((d) => {
+        const apellido = d.nombre.split(' ').slice(-1)[0]?.toLowerCase();
+        return apellido && lower.includes(apellido);
+      });
+      if (matchDoc) {
+        handleSelectProfesional(matchDoc.nombre, matchDoc.id);
         return;
       }
     }
 
     if (currentStep === 'SELECCION_DIA') {
-      if (lower.includes('miercoles') || lower.includes('miércoles') || lower.includes('9')) {
-        handleSelectDia('2026-09-09', 'Miércoles 9 de septiembre', 'Miércoles 9');
-        return;
-      }
-      if (lower.includes('jueves') || lower.includes('10')) {
-        handleSelectDia('2026-09-10', 'Jueves 10 de septiembre', 'Jueves 10');
-        return;
-      }
-      if (lower.includes('primer') || lower.includes('antes') || lower.includes('igual')) {
-        handleSelectDia('2026-09-09', 'Miércoles 9 de septiembre', 'Miércoles 9');
-        return;
-      }
+      (async () => {
+        const servicioNombre = bookingState.servicioNombre || '';
+        const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
+        const prefHoraria = bookingState.preferenciaHoraria || 'manana';
+        const realSlots = await fetchRealSlots(servicioNombre, bookingState.profesionalPreferido, tipoAgenda);
+        const eligibleDays = groupSlotsByDay(realSlots, prefHoraria);
+        if (eligibleDays.length === 0) return;
+
+        const byWeekday = eligibleDays.find((d) => d.label.toLowerCase().includes(lower.trim()));
+        const chosen = byWeekday || (lower.includes('primer') || lower.includes('igual') ? eligibleDays[0] : undefined);
+        if (chosen) {
+          handleSelectDia(chosen.date, chosen.label, chosen.shortLabel);
+        }
+      })();
+      return;
     }
 
     if (currentStep === 'SELECCION_HORARIO') {
-      if (lower.includes('10:30') || lower.includes('10 y media') || lower.includes('diez y media')) {
-        handleSelectSlot({
-          fecha: bookingState.fechaSeleccionada || '2026-09-09',
-          dayLabel: bookingState.fechaLabel || 'Miércoles 9 de septiembre',
-          hora: '10:30',
-          profesional: 'Dra. Laura Gómez',
-          consultorio: '14',
-          tipoAgenda: 'PROFESIONAL',
-        });
-        return;
-      }
-      if (lower.includes('9') || lower.includes('09:00')) {
-        handleSelectSlot({
-          fecha: bookingState.fechaSeleccionada || '2026-09-09',
-          dayLabel: bookingState.fechaLabel || 'Miércoles 9 de septiembre',
-          hora: '09:00',
-          profesional: 'Dr. Martín Fernández',
-          consultorio: '8',
-          tipoAgenda: 'PROFESIONAL',
-        });
-        return;
-      }
+      (async () => {
+        const servicioNombre = bookingState.servicioNombre || '';
+        const tipoAgenda = bookingState.tipoAgenda || 'PROFESIONAL';
+        const fecha = bookingState.fechaSeleccionada;
+        if (!fecha) return;
+        const realSlots = await fetchRealSlots(servicioNombre, bookingState.profesionalPreferido, tipoAgenda);
+        const slotsDelDia = realSlots.filter((s) => s.fecha === fecha);
+        const matchSlot = slotsDelDia.find((s) => lower.includes(s.hora)) || (slotsDelDia.length === 1 ? slotsDelDia[0] : undefined);
+        if (matchSlot) {
+          handleSelectSlot(matchSlot);
+        }
+      })();
+      return;
     }
 
     if (currentStep === 'RESUMEN') {
@@ -1853,38 +1744,60 @@ export const WhatsAppSimulator: React.FC = () => {
   // ============================================================================
   // ONE-CLICK DEMO RUNNER (FOR JURY PRESENTATION)
   // ============================================================================
-  const runCanonicalDemoWalkthrough = () => {
-    initConversation();
+  const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-    setTimeout(() => {
-      handleStartSolicitud();
-      setTimeout(() => {
-        handleSelectPersona('Sofía Gómez', 'p-sofia', 12);
-        setTimeout(() => {
-          handleSelectPreferenciaHoraria('manana', 'Mañana (antes de las 13:00 hs)');
-          setTimeout(() => {
-            const s = specialties.find((sp) => sp.nombre.toLowerCase().includes('trauma'));
-            handleSelectServicio(s?.id || 's3', 'Traumatología', 'PROFESIONAL', 'consulta_medica');
-            setTimeout(() => {
-              handleSelectProfesional('Me da igual');
-              setTimeout(() => {
-                handleSelectDia('2026-09-09', 'Miércoles 9 de septiembre', 'Miércoles 9');
-                setTimeout(() => {
-                  handleSelectSlot({
-                    fecha: '2026-09-09',
-                    dayLabel: 'Miércoles 9 de septiembre',
-                    hora: '10:30',
-                    profesional: 'Dra. Laura Gómez',
-                    consultorio: '14',
-                    tipoAgenda: 'PROFESIONAL',
-                  });
-                }, 800);
-              }, 800);
-            }, 800);
-          }, 800);
-        }, 800);
-      }, 800);
-    }, 600);
+  // Recorre el flujo guiado con datos 100% reales (persona a cargo, servicio
+  // y disponibilidad real de agenda_slots) — no hay fecha/hora/profesional
+  // hardcodeados. Elegimos "Sofía" y "Traumatología" cuando existen en los
+  // datos reales; si no, usamos la primera persona/servicio disponible.
+  const runCanonicalDemoWalkthrough = async () => {
+    initConversation();
+    await sleep(600);
+
+    handleStartSolicitud();
+    await sleep(800);
+
+    const sofia = personasACargo.find((p) => (p.paciente?.nombre || p.nombre || '').toLowerCase().includes('sofía') || (p.paciente?.nombre || p.nombre || '').toLowerCase().includes('sofia'));
+    const persona = sofia || personasACargo[0];
+    if (!persona) {
+      addBotMessage('No hay personas a cargo cargadas para este tutor todavía.', 'MENU_PRINCIPAL', []);
+      return;
+    }
+    const p = persona.paciente || persona;
+    handleSelectPersona(p.nombre, p.id, p.edad);
+    await sleep(800);
+
+    handleSelectPreferenciaHoraria('manana', 'Mañana (antes de las 13:00 hs)');
+    await sleep(800);
+
+    const trauma = specialties.find((sp) => sp.nombre.toLowerCase().includes('trauma'));
+    const servicio = trauma || specialties[0];
+    if (!servicio) {
+      addBotMessage('No hay servicios cargados en el sistema todavía.', 'MENU_PRINCIPAL', []);
+      return;
+    }
+    handleSelectServicio(servicio.id, servicio.nombre, servicio.tipoAgenda, servicio.tipoPrestacion);
+    await sleep(800);
+
+    if (servicio.tipoAgenda === 'PROFESIONAL') {
+      handleSelectProfesional('Me da igual');
+    }
+    await sleep(800);
+
+    // Disponibilidad real: primer día hábil con cupos y su primer horario
+    const realSlots = await fetchRealSlots(servicio.nombre, 'Me da igual', servicio.tipoAgenda);
+    const eligibleDays = groupSlotsByDay(realSlots, 'manana');
+    if (eligibleDays.length === 0) {
+      addBotMessage(`No hay disponibilidad real cargada para ${servicio.nombre} en este momento (revisá el seed de Supabase).`, 'MENU_PRINCIPAL', []);
+      return;
+    }
+
+    const firstDay = eligibleDays[0];
+    handleSelectDia(firstDay.date, firstDay.label, firstDay.shortLabel);
+    await sleep(800);
+
+    const firstSlot = firstDay.slots[0];
+    handleSelectSlot(firstSlot);
   };
 
   if (!isWhatsAppOpen) return null;
@@ -1921,7 +1834,7 @@ export const WhatsAppSimulator: React.FC = () => {
             <button
               id="btn-switch-agenda-direct"
               onClick={() => {
-                setRole('secretario');
+                setRole('administrativo');
                 closeWhatsAppSimulator();
               }}
               title="Cambiar al rol Secretario y abrir la agenda administrativa"

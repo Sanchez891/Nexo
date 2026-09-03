@@ -1,6 +1,8 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { TipoAgenda, TipoPrestacion, Localidad, Appointment } from '../../types';
+import { AvailableSlot, filterByPreferenciaHoraria, getSlotsDisponibles, maxBookingDate } from '../../services/agenda.service';
+import { realProfesionalId } from '../../services/professionals.service';
 import {
   User,
   Clock,
@@ -52,7 +54,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const {
     currentTutor,
     getPersonasACargo,
-    appointments,
     doctors,
     specialties,
     bookAppointment,
@@ -85,6 +86,13 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     servicio: string;
     posicion: number;
   } | null>(null);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  // Slots reales traídos de agenda_slots (Supabase) para el servicio/profesional elegido
+  const [rawSlots, setRawSlots] = useState<AvailableSlot[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [slotsError, setSlotsError] = useState<string | null>(null);
 
   // Resolved Data Helpers
   const selectedPatientRel = useMemo(() => {
@@ -112,154 +120,98 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   }, [doctors, selectedServicio]);
 
   // ============================================================================
-  // BUSINESS LOGIC: GENERATE DATES AND SLOTS FROM REAL CENTRAL AGENDA
+  // DISPONIBILIDAD REAL: consulta agenda_slots en Supabase (no hay horarios
+  // hardcodeados). Límite de hasta 30 días de anticipación (agenda.service).
   // ============================================================================
 
-  // Generate business days for the next 30 days starting from current active baseline
-  const candidateDays = useMemo(() => {
-    const list: Array<{ date: string; label: string; shortLabel: string; dayOfWeek: number }> = [];
-    const baseDate = new Date(2026, 8, 9); // 2026-09-09 (Miércoles)
+  const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
+  const monthNames = [
+    'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
+    'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
+  ];
+  const shortDays = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
+  const shortMonths = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
 
-    const dayNames = ['Domingo', 'Lunes', 'Martes', 'Miércoles', 'Jueves', 'Viernes', 'Sábado'];
-    const monthNames = [
-      'enero', 'febrero', 'marzo', 'abril', 'mayo', 'junio',
-      'julio', 'agosto', 'septiembre', 'octubre', 'noviembre', 'diciembre',
-    ];
-    const shortDays = ['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'];
-    const shortMonths = ['Ene', 'Feb', 'Mar', 'Abr', 'May', 'Jun', 'Jul', 'Ago', 'Sep', 'Oct', 'Nov', 'Dic'];
-
-    for (let i = 0; i < 30; i++) {
-      const d = new Date(baseDate);
-      d.setDate(baseDate.getDate() + i);
-
-      const dayOfWeek = d.getDay();
-      // Skip weekends (0=Sunday, 6=Saturday)
-      if (dayOfWeek === 0 || dayOfWeek === 6) continue;
-
-      const year = d.getFullYear();
-      const month = String(d.getMonth() + 1).padStart(2, '0');
-      const day = String(d.getDate()).padStart(2, '0');
-      const dateStr = `${year}-${month}-${day}`;
-
-      const label = `${dayNames[dayOfWeek]} ${d.getDate()} de ${monthNames[d.getMonth()]}`;
-      const shortLabel = `${shortDays[dayOfWeek]} ${d.getDate()} ${shortMonths[d.getMonth()]}`;
-
-      list.push({ date: dateStr, label, shortLabel, dayOfWeek });
-    }
-    return list;
-  }, []);
-
-  // Compute available slots for a given date
-  const getAvailableSlotsForDate = (dateStr: string, dateLabel: string) => {
-    if (!selectedServicio || !preferenciaHoraria) return [];
-
-    const activeAppointments = appointments.filter((a) => a.estado !== 'CANCELADO');
-    const tipoAgenda = selectedServicio.tipoAgenda;
-
-    // Standard hospital pediatric consultation slot times
-    let baseHours = ['08:30', '09:00', '09:45', '10:30', '11:15', '12:00', '12:45', '13:30', '14:15'];
-
-    if (preferenciaHoraria === 'manana') {
-      baseHours = baseHours.filter((h) => parseInt(h.split(':')[0], 10) < 13);
-    } else if (preferenciaHoraria === 'tarde') {
-      baseHours = baseHours.filter((h) => parseInt(h.split(':')[0], 10) >= 13);
-    }
-
-    const available: Array<{
-      fecha: string;
-      dayLabel: string;
-      hora: string;
-      profesional: string;
-      profesionalId?: string;
-      consultorio: string;
-      tipoAgenda: TipoAgenda;
-    }> = [];
-
-    if (tipoAgenda === 'SERVICIO') {
-      for (const h of baseHours) {
-        const occupiedCount = activeAppointments.filter(
-          (a) =>
-            a.fecha === dateStr &&
-            a.hora === h &&
-            a.especialidad.toLowerCase() === selectedServicio.nombre.toLowerCase()
-        ).length;
-
-        if (occupiedCount < 2) {
-          available.push({
-            fecha: dateStr,
-            dayLabel: dateLabel,
-            hora: h,
-            profesional: 'Se asignará al momento de la atención',
-            consultorio: selectedServicio.consultoriosHabilitados?.[0]
-              ? `Consultorio ${selectedServicio.consultoriosHabilitados[0]}`
-              : 'Consultorio de Servicio',
-            tipoAgenda: 'SERVICIO',
-          });
-        }
-      }
-    } else {
-      let targetDoctors = serviceDoctors;
-      if (profesionalId && !isMeDaIgualProfesional) {
-        targetDoctors = serviceDoctors.filter((d) => d.id === profesionalId);
-      }
-
-      for (const doc of targetDoctors) {
-        for (const h of baseHours) {
-          const isOccupied = activeAppointments.some(
-            (a) =>
-              a.fecha === dateStr &&
-              a.hora === h &&
-              a.profesional.toLowerCase() === doc.nombre.toLowerCase()
-          );
-
-          if (!isOccupied) {
-            available.push({
-              fecha: dateStr,
-              dayLabel: dateLabel,
-              hora: h,
-              profesional: doc.nombre,
-              profesionalId: doc.id,
-              consultorio: `Consultorio ${doc.consultorio}`,
-              tipoAgenda: 'PROFESIONAL',
-            });
-          }
-        }
-      }
-    }
-
-    return available.sort((a, b) => a.hora.localeCompare(b.hora));
+  const formatDateLabel = (dateStr: string) => {
+    const d = new Date(`${dateStr}T00:00:00`);
+    const dow = d.getDay();
+    return {
+      label: `${dayNames[dow]} ${d.getDate()} de ${monthNames[d.getMonth()]}`,
+      shortLabel: `${shortDays[dow]} ${d.getDate()} ${shortMonths[d.getMonth()]}`,
+    };
   };
 
-  // Eligible days with at least 1 available slot matching criteria
-  const eligibleDays = useMemo(() => {
-    if (!selectedServicio || !preferenciaHoraria) return [];
+  // Trae los slots DISPONIBLE reales apenas se conoce el servicio y el
+  // profesional preferido (o "me da igual").
+  useEffect(() => {
+    let cancelled = false;
+    if (!selectedServicio) {
+      setRawSlots([]);
+      return;
+    }
 
-    return candidateDays
-      .map((day) => {
-        const slots = getAvailableSlotsForDate(day.date, day.label);
-        return {
-          ...day,
-          availableSlotsCount: slots.length,
-          slots,
-        };
+    setLoadingSlots(true);
+    setSlotsError(null);
+
+    const profesionalRealId =
+      selectedServicio.tipoAgenda === 'PROFESIONAL' && profesionalId && !isMeDaIgualProfesional
+        ? realProfesionalId(profesionalId)
+        : undefined;
+
+    getSlotsDisponibles({
+      servicioId: selectedServicio.id,
+      profesionalId: profesionalRealId,
+      tipoAgenda: selectedServicio.tipoAgenda,
+    })
+      .then((slots) => {
+        if (!cancelled) setRawSlots(slots);
       })
-      .filter((d) => d.availableSlotsCount > 0);
-  }, [candidateDays, selectedServicio, preferenciaHoraria, profesionalId, isMeDaIgualProfesional, appointments, serviceDoctors]);
+      .catch((err) => {
+        if (!cancelled) setSlotsError(err?.message || 'No se pudo consultar la agenda. Intentá nuevamente.');
+      })
+      .finally(() => {
+        if (!cancelled) setLoadingSlots(false);
+      });
 
-  // Slots available for the currently selected date
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedServicio, profesionalId, isMeDaIgualProfesional]);
+
+  const slotsForPreferencia = useMemo(
+    () => filterByPreferenciaHoraria(rawSlots, preferenciaHoraria || 'cualquiera'),
+    [rawSlots, preferenciaHoraria]
+  );
+
+  // Días con al menos 1 slot disponible que cumple la preferencia horaria
+  const eligibleDays = useMemo(() => {
+    const byDate = new Map<string, AvailableSlot[]>();
+    slotsForPreferencia.forEach((slot) => {
+      const arr = byDate.get(slot.fecha) || [];
+      arr.push(slot);
+      byDate.set(slot.fecha, arr);
+    });
+
+    return Array.from(byDate.entries())
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([date, slots]) => {
+        const { label, shortLabel } = formatDateLabel(date);
+        return { date, label, shortLabel, availableSlotsCount: slots.length, slots };
+      });
+  }, [slotsForPreferencia]);
+
+  // Slots disponibles para el día seleccionado
   const availableSlotsForSelectedDate = useMemo(() => {
     if (!fechaSeleccionada) return [];
-    const dayObj = candidateDays.find((d) => d.date === fechaSeleccionada);
-    const dayLabel = dayObj?.label || fechaSeleccionada;
-    return getAvailableSlotsForDate(fechaSeleccionada, dayLabel);
-  }, [fechaSeleccionada, candidateDays, selectedServicio, preferenciaHoraria, profesionalId, isMeDaIgualProfesional, appointments, serviceDoctors]);
+    return slotsForPreferencia
+      .filter((s) => s.fecha === fechaSeleccionada)
+      .sort((a, b) => a.hora.localeCompare(b.hora));
+  }, [fechaSeleccionada, slotsForPreferencia]);
 
-  // Selected date label
   const selectedDateLabel = useMemo(() => {
     if (!fechaSeleccionada) return '';
-    const d = candidateDays.find((item) => item.date === fechaSeleccionada);
-    return d ? d.label : fechaSeleccionada;
-  }, [fechaSeleccionada, candidateDays]);
+    return formatDateLabel(fechaSeleccionada).label;
+  }, [fechaSeleccionada]);
 
   // ============================================================================
   // STEP STEP NAVIGATION & MODIFICATION RULES (INVALIDATING DOWNSTREAM CHOICES)
@@ -321,19 +273,11 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     setCurrentStep('TURNO');
   };
 
-  const handleSelectSlot = (slot: {
-    hora: string;
-    profesional: string;
-    profesionalId?: string;
-    consultorio: string;
-  }) => {
+  const handleSelectSlot = (slot: AvailableSlot) => {
     setHoraSeleccionada(slot.hora);
     setSlotProfesionalNombre(slot.profesional);
     setSlotConsultorio(slot.consultorio);
-    if (slot.profesionalId && !profesionalId) {
-      // If user chose "Me da igual", assign the doctor of this specific slot
-      setProfesionalId(slot.profesionalId);
-    }
+    setSelectedSlotId(slot.slotId);
     setCollisionError(null);
     setCurrentStep('RESUMEN');
   };
@@ -368,90 +312,70 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     }
   };
 
-  // Confirm appointment with anti-collision verification
-  const handleConfirmAppointment = () => {
-    if (!selectedPatient || !selectedServicio || !fechaSeleccionada || !horaSeleccionada) {
+  // Confirm appointment: la atomicidad la garantiza reservar_turno() en Supabase.
+  const handleConfirmAppointment = async () => {
+    if (!selectedPatient || !selectedServicio || !fechaSeleccionada || !horaSeleccionada || !selectedSlotId) {
       return;
     }
 
-    // 1. Anti-collision check against central appointments
-    const activeAppointments = appointments.filter((a) => a.estado !== 'CANCELADO');
-    const doctorNameToCompare = slotProfesionalNombre || selectedDoctor?.nombre || '';
+    setSubmitting(true);
+    setCollisionError(null);
+    try {
+      const result = await bookAppointment({
+        slotId: selectedSlotId,
+        pacienteId: selectedPatient.id,
+        tutorSolicitanteId: currentTutor?.id,
+        origenCanal: 'web',
+        motivoResumido: `Solicitud Web de Turno - ${selectedServicio.nombre}`,
+      });
 
-    if (selectedServicio.tipoAgenda === 'PROFESIONAL' && doctorNameToCompare && doctorNameToCompare !== 'Se asignará al momento de la atención') {
-      const isSlotAlreadyOccupied = activeAppointments.some(
-        (a) =>
-          a.fecha === fechaSeleccionada &&
-          a.hora === horaSeleccionada &&
-          a.profesional.toLowerCase() === doctorNameToCompare.toLowerCase()
-      );
-
-      if (isSlotAlreadyOccupied) {
-        setCollisionError('Este horario acaba de ser reservado por otro usuario. Por favor elegí otra opción disponible.');
-        return;
+      if (result.success && result.appointment) {
+        setConfirmedAppointment(result.appointment);
+        setCurrentStep('CONFIRMADO');
+      } else {
+        setCollisionError(result.error || 'Este horario acaba de ser reservado. Elegí otra opción disponible.');
+        setSelectedSlotId(null);
+        setHoraSeleccionada(null);
+        // refresca disponibilidad real para que el usuario vea otras opciones
+        setCurrentStep('TURNO');
       }
-    }
-
-    // 2. Book appointment via central HospitalContext method
-    const result = bookAppointment({
-      pacienteId: selectedPatient.id,
-      pacienteNombre: selectedPatient.nombre,
-      pacienteDni: selectedPatient.dni,
-      pacienteEdad: selectedPatient.edad,
-      pacienteLocalidad: selectedPatient.localidad || currentTutor?.localidad || 'Mercedes',
-      tutorSolicitanteId: currentTutor?.id,
-      tutorSolicitanteNombre: `${currentTutor?.nombre} ${currentTutor?.apellido}`,
-      tutorSolicitanteRelacion: selectedPatientRel?.relacion || 'Madre',
-      tutorSolicitanteTelefono: currentTutor?.telefono,
-      tipoPrestacion: selectedServicio.tipoPrestacion,
-      tipoAgenda: selectedServicio.tipoAgenda,
-      especialidad: selectedServicio.nombre,
-      profesional: slotProfesionalNombre || selectedDoctor?.nombre || 'Se asignará al momento de la atención',
-      fecha: fechaSeleccionada,
-      hora: horaSeleccionada,
-      origenCanal: 'web', // Strict canalOrigen: WEB
-      tipoConsulta: 'Primera consulta',
-      tieneDerivacion: true,
-      motivoResumido: `Solicitud Web de Turno - ${selectedServicio.nombre}`,
-    });
-
-    if (result.success && result.appointment) {
-      setConfirmedAppointment(result.appointment);
-      setCurrentStep('CONFIRMADO');
-    } else {
-      setCollisionError(result.error || 'No se pudo confirmar el turno. Por favor intentá nuevamente.');
+    } catch (err: any) {
+      setCollisionError(err?.message || 'No se pudo confirmar el turno. Por favor intentá nuevamente.');
+    } finally {
+      setSubmitting(false);
     }
   };
 
   // Confirm waitlist entry
-  const handleConfirmWaitlist = () => {
+  const handleConfirmWaitlist = async () => {
     if (!selectedPatient || !selectedServicio) return;
 
-    const entry = addToWaitlist({
-      pacienteId: selectedPatient.id,
-      pacienteNombre: selectedPatient.nombre,
-      dni: selectedPatient.dni,
-      edad: selectedPatient.edad || 8,
-      especialidad: selectedServicio.nombre,
-      tipoPrestacion: selectedServicio.tipoPrestacion,
-      localidad: selectedPatient.localidad || currentTutor?.localidad || 'Mercedes',
-      preferenciaHorario: preferenciaHoraria || 'cualquiera',
-      prioridad: 'normal',
-      telefono: currentTutor?.telefono || '3794-556677',
-      motivo: `Lista de espera web para ${selectedServicio.nombre} (${preferenciaHoraria || 'sin preferencia'})`,
-      tutorResponsableId: currentTutor?.id,
-      tutorResponsableNombre: `${currentTutor?.nombre} ${currentTutor?.apellido}`,
-      tutorResponsableTelefono: currentTutor?.telefono,
-      tutorResponsableRelacion: selectedPatientRel?.relacion || 'Madre',
-      origenCanal: 'web',
-    });
+    setSubmitting(true);
+    try {
+      const entry = await addToWaitlist({
+        pacienteId: selectedPatient.id,
+        tutorId: currentTutor?.id,
+        especialidad: selectedServicio.nombre,
+        profesionalPreferidoId:
+          selectedServicio.tipoAgenda === 'PROFESIONAL' && profesionalId && !isMeDaIgualProfesional
+            ? realProfesionalId(profesionalId)
+            : undefined,
+        preferenciaHorario: preferenciaHoraria || 'cualquiera',
+        localidad: selectedPatient.localidad || currentTutor?.localidad || 'Mercedes',
+        origenCanal: 'web',
+      });
 
-    setWaitlistSuccessInfo({
-      pacienteNombre: selectedPatient.nombre,
-      servicio: selectedServicio.nombre,
-      posicion: entry.posicion || 1,
-    });
-    setCurrentStep('EXITO_LISTA_ESPERA');
+      setWaitlistSuccessInfo({
+        pacienteNombre: selectedPatient.nombre,
+        servicio: selectedServicio.nombre,
+        posicion: entry.posicion || 1,
+      });
+      setCurrentStep('EXITO_LISTA_ESPERA');
+    } catch (err: any) {
+      setCollisionError(err?.message || 'No se pudo registrar en la lista de espera. Intentá nuevamente.');
+    } finally {
+      setSubmitting(false);
+    }
   };
 
   // Step Number for progress indicator
@@ -605,7 +529,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
               const pLocalidad = p.localidad || 'Mercedes';
 
               // Validation: greater than 1 month and up to 15 years inclusive
-              const isEligible = pEdad >= 0.08 && pEdad <= 15;
+              const isEligible = validatePediatricAge(pEdad, p.edadMeses).valid;
               const isSelected = pacienteId === pId;
 
               return (
@@ -1022,8 +946,14 @@ export const WebAppointmentWizard: React.FC<Props> = ({
             )}
           </div>
 
-          {/* If NO eligible days found */}
-          {eligibleDays.length === 0 ? (
+          {/* Loading / error / empty states (consulta real a agenda_slots) */}
+          {loadingSlots ? (
+            <div className="p-8 text-center text-stone-500 text-xs font-medium">Cargando disponibilidad…</div>
+          ) : slotsError ? (
+            <div className="p-6 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold text-center">
+              {slotsError}
+            </div>
+          ) : eligibleDays.length === 0 ? (
             <div className="p-6 rounded-2xl bg-stone-50 border border-stone-200 text-center space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-800 mx-auto flex items-center justify-center">
                 <AlertTriangle className="w-6 h-6" />
@@ -1331,10 +1261,11 @@ export const WebAppointmentWizard: React.FC<Props> = ({
             <button
               type="button"
               onClick={handleConfirmAppointment}
-              className="w-full sm:w-auto px-7 py-3 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-sm shadow-xs transition-all flex items-center justify-center gap-2"
+              disabled={submitting}
+              className="w-full sm:w-auto px-7 py-3 rounded-xl bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white font-bold text-sm shadow-xs transition-all flex items-center justify-center gap-2"
             >
               <CheckCircle2 className="w-4 h-4" />
-              <span>Confirmar turno</span>
+              <span>{submitting ? 'Confirmando…' : 'Confirmar turno'}</span>
             </button>
           </div>
         </div>
@@ -1505,7 +1436,8 @@ export const WebAppointmentWizard: React.FC<Props> = ({
             <button
               type="button"
               onClick={handleConfirmWaitlist}
-              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 text-white text-xs font-bold transition-colors shadow-xs"
+              disabled={submitting}
+              className="w-full sm:w-auto px-6 py-2.5 rounded-xl bg-amber-600 hover:bg-amber-700 disabled:opacity-60 text-white text-xs font-bold transition-colors shadow-xs"
             >
               Confirmar ingreso a lista de espera
             </button>

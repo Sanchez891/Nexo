@@ -7,10 +7,56 @@ import { DoctorPortal } from './components/medico/DoctorPortal';
 import { AsistenteSocialPortal } from './components/social/AsistenteSocialPortal';
 import { DirectivoSettings } from './components/directivo/DirectivoSettings';
 import { WhatsAppSimulator } from './components/whatsapp/WhatsAppSimulator';
-import { Building2 } from 'lucide-react';
+import { Building2, Loader2, AlertTriangle } from 'lucide-react';
+import { isSupabaseConfigured } from './lib/supabase';
 
 const HospitalAppContent: React.FC = () => {
-  const { role } = useHospital();
+  const { role, loading, dataError, refreshAll } = useHospital();
+
+  if (!isSupabaseConfigured) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-100 p-6">
+        <div className="max-w-md bg-white border border-rose-200 rounded-2xl p-6 text-center space-y-3 shadow-sm">
+          <AlertTriangle className="w-8 h-8 text-rose-600 mx-auto" />
+          <h2 className="font-bold text-stone-900">Falta configurar Supabase</h2>
+          <p className="text-sm text-stone-600">
+            Definí <code className="font-mono text-xs bg-stone-100 px-1 rounded">VITE_SUPABASE_URL</code> y{' '}
+            <code className="font-mono text-xs bg-stone-100 px-1 rounded">VITE_SUPABASE_ANON_KEY</code> en un archivo{' '}
+            <code className="font-mono text-xs bg-stone-100 px-1 rounded">.env.local</code> (ver .env.example) y reiniciá la app.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (loading) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-100">
+        <div className="flex flex-col items-center gap-3 text-stone-500">
+          <Loader2 className="w-8 h-8 animate-spin text-teal-700" />
+          <p className="text-sm font-medium">Cargando datos del hospital…</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (dataError) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-stone-100 p-6">
+        <div className="max-w-md bg-white border border-rose-200 rounded-2xl p-6 text-center space-y-3 shadow-sm">
+          <AlertTriangle className="w-8 h-8 text-rose-600 mx-auto" />
+          <h2 className="font-bold text-stone-900">No se pudo consultar la base de datos</h2>
+          <p className="text-sm text-stone-600">{dataError}</p>
+          <button
+            onClick={() => refreshAll()}
+            className="px-4 py-2 rounded-xl bg-teal-700 hover:bg-teal-800 text-white text-sm font-bold"
+          >
+            Intentar nuevamente
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="min-h-screen bg-stone-100/80 text-stone-900 flex flex-col font-sans antialiased selection:bg-teal-700 selection:text-white">

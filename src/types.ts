@@ -107,6 +107,7 @@ export interface Appointment {
   especialidad: string;
   profesional: string; // Nombre del profesional o "Se asignará al momento de la atención"
   profesionalId?: string;
+  slotId?: string; // id real del agenda_slots vinculado (Supabase)
   consultorio: string;
   fecha: string; // YYYY-MM-DD
   hora: string;  // HH:MM

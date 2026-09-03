@@ -24,12 +24,14 @@ export const FamiliarWaitlist: React.FC = () => {
     dismissPatientSlotOffer,
     currentTutor,
     getPersonasACargo,
+    specialties,
   } = useHospital();
 
   const personasACargo = getPersonasACargo(currentTutor?.id);
   const firstPersona = personasACargo[0]?.paciente || personasACargo[0];
-  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(firstPersona?.id || 'p1');
-  const [selectedSpecialty, setSelectedSpecialty] = useState('Cardiología Pediátrica');
+  const [selectedPersonaId, setSelectedPersonaId] = useState<string>(firstPersona?.id || '');
+  const [selectedSpecialty, setSelectedSpecialty] = useState(specialties[0]?.nombre || '');
+  const [joining, setJoining] = useState(false);
   const [preferenciaHorario, setPreferenciaHorario] = useState<'cualquiera' | 'manana' | 'tarde'>('cualquiera');
   const [localNotification, setLocalNotification] = useState<{
     especialidad: string;
@@ -49,27 +51,21 @@ export const FamiliarWaitlist: React.FC = () => {
     });
   });
 
-  const handleJoinWaitlist = () => {
-    if (!selectedPersona) return;
-    const tutorId = currentTutor?.id || 'tut-maria';
-    const tutorNombre = currentTutor ? `${currentTutor.nombre} ${currentTutor.apellido}` : 'María González';
-    const tutorTelefono = currentTutor?.telefono || '+54 3794 451299';
-    const tutorRel = selectedRel?.tipoRelacion || selectedRel?.relacion || 'Tutor responsable';
-
-    addToWaitlist({
-      pacienteId: selectedPersona.id,
-      pacienteNombre: selectedPersona.nombre,
-      dni: selectedPersona.dni,
-      especialidad: selectedSpecialty,
-      localidad: selectedPersona.localidad,
-      preferenciaHorario,
-      prioridad: 'normal',
-      telefono: tutorTelefono,
-      tutorSolicitanteId: tutorId,
-      tutorSolicitanteNombre: tutorNombre,
-      tutorSolicitanteRelacion: tutorRel,
-      tutorSolicitanteTelefono: tutorTelefono,
-    });
+  const handleJoinWaitlist = async () => {
+    if (!selectedPersona || !selectedSpecialty) return;
+    setJoining(true);
+    try {
+      await addToWaitlist({
+        pacienteId: selectedPersona.id,
+        tutorId: currentTutor?.id,
+        especialidad: selectedSpecialty,
+        preferenciaHorario,
+        localidad: selectedPersona.localidad,
+        origenCanal: 'web',
+      });
+    } finally {
+      setJoining(false);
+    }
   };
 
   const handleSimulateSlotRelease = () => {
@@ -298,10 +294,11 @@ export const FamiliarWaitlist: React.FC = () => {
                 onChange={(e) => setSelectedSpecialty(e.target.value)}
                 className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-sm font-medium text-stone-800"
               >
-                <option value="Cardiología Pediátrica">Cardiología Pediátrica</option>
-                <option value="Neurología">Neurología Infantil</option>
-                <option value="Traumatología">Traumatología</option>
-                <option value="Nutrición">Nutrición</option>
+                {specialties.map((s) => (
+                  <option key={s.id} value={s.nombre}>
+                    {s.nombre}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -333,10 +330,11 @@ export const FamiliarWaitlist: React.FC = () => {
 
             <button
               onClick={handleJoinWaitlist}
-              className="w-full py-3 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-colors"
+              disabled={joining || !selectedPersona}
+              className="w-full py-3 bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white font-bold rounded-xl text-xs shadow-xs flex items-center justify-center gap-2 transition-colors"
             >
               <Send className="w-4 h-4" />
-              <span>Sumarme a lista de espera para {selectedPersona?.nombre || 'la persona a cargo'}</span>
+              <span>{joining ? 'Enviando…' : `Sumarme a lista de espera para ${selectedPersona?.nombre || 'la persona a cargo'}`}</span>
             </button>
           </div>
         </div>

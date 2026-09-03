@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { Patient, Appointment, Localidad, TipoPrestacion, TipoAgenda } from '../../types';
+import { AvailableSlot, getSlotsDisponibles } from '../../services/agenda.service';
 import {
   Users,
   MapPin,
@@ -27,7 +28,6 @@ export const AsistenteSocialPortal: React.FC = () => {
     patients,
     appointments,
     specialties,
-    doctors,
     bookAppointment,
     optimizePatientVisits,
     registerPatient,
@@ -35,7 +35,7 @@ export const AsistenteSocialPortal: React.FC = () => {
     advanceDemoStep,
   } = useHospital();
 
-  const [selectedPatientId, setSelectedPatientId] = useState<string>('p1'); // Lucas Gómez
+  const [selectedPatientId, setSelectedPatientId] = useState<string>('');
   const [searchTerm, setSearchTerm] = useState('');
   const [showNewPatientModal, setShowNewPatientModal] = useState(false);
   const [showNewAptModal, setShowNewAptModal] = useState(false);
@@ -62,12 +62,9 @@ export const AsistenteSocialPortal: React.FC = () => {
 
   // New Appointment Form State
   const [newAptForm, setNewAptForm] = useState({
-    especialidad: 'Cardiología Pediátrica',
+    especialidad: specialties[0]?.nombre || '',
     tipoPrestacion: 'consulta_medica' as TipoPrestacion,
-    tipoAgenda: 'PROFESIONAL' as TipoAgenda,
-    profesional: 'Dr. Juan Pérez',
-    fecha: '2026-09-10',
-    hora: '10:30',
+    tipoAgenda: specialties[0]?.tipoAgenda || ('PROFESIONAL' as TipoAgenda),
     motivo: 'Evaluación de seguimiento solicitada por Servicio Social',
   });
   const [bookingMsg, setBookingMsg] = useState<{ success: boolean; text: string } | null>(null);
@@ -82,68 +79,46 @@ export const AsistenteSocialPortal: React.FC = () => {
     return isInterior && matchesSearch;
   });
 
-  const fallbackPatient: Patient = {
-    id: 'p1',
-    dni: '55.123.456',
-    nombre: 'Lucas Gómez',
-    fechaNacimiento: '2018-05-10',
-    edad: 8,
-    localidad: 'Mercedes',
-    distanciaKm: 245,
-    telefono: '+54 3794 451299',
-    tutor: 'María González',
-    tutorId: 'tut-maria',
-    relacionConTutor: 'Madre',
-  };
+  useEffect(() => {
+    if (!selectedPatientId && interiorPatients[0]) {
+      setSelectedPatientId(interiorPatients[0].id);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [patients.length]);
 
-  const currentPatient: Patient =
-    patients.find((p) => p.id === selectedPatientId) ||
-    patients[0] ||
-    fallbackPatient;
+  const currentPatient: Patient | undefined =
+    patients.find((p) => p.id === selectedPatientId) || interiorPatients[0];
 
   // Active appointments for selected patient
-  const patientAppointments = appointments.filter(
-    (a) =>
-      (a.pacienteId === currentPatient.id || a.pacienteNombre.toLowerCase() === currentPatient.nombre.toLowerCase()) &&
-      a.estado !== 'CANCELADO'
-  );
+  const patientAppointments = currentPatient
+    ? appointments.filter((a) => a.pacienteId === currentPatient.id && a.estado !== 'CANCELADO')
+    : [];
 
   // Unique trip days (dates)
   const uniqueTripDates = Array.from(new Set(patientAppointments.map((a) => a.fecha)));
   const tripCount = uniqueTripDates.length;
 
-  const handleRunOptimization = () => {
+  const handleRunOptimization = async () => {
+    if (!currentPatient) return;
     setIsOptimizing(true);
-    setTimeout(() => {
-      const res = optimizePatientVisits(currentPatient.nombre);
+    try {
+      const res = await optimizePatientVisits(currentPatient.id);
       setOptimizationResult(res);
-      setIsOptimizing(false);
       advanceDemoStep();
-    }, 800);
+    } finally {
+      setIsOptimizing(false);
+    }
   };
 
-  const handleCreatePatient = (e: React.FormEvent) => {
+  const handleCreatePatient = async (e: React.FormEvent) => {
     e.preventDefault();
     setPatientError(null);
-    const ageVal = validatePediatricAge(newPatientForm.edad);
-    if (!ageVal.valid) {
-      setPatientError(ageVal.error || 'Edad fuera de rango.');
-      return;
-    }
 
-    const distMap: Record<string, number> = {
-      Mercedes: 245,
-      Goya: 218,
-      'Paso de los Libres': 360,
-      'Curuzú Cuatiá': 310,
-      'Bella Vista': 140,
-      Ituzaingó: 230,
-      'Santo Tomé': 385,
-    };
-
-    const res = registerPatient({
-      ...newPatientForm,
-      distanciaKm: distMap[newPatientForm.localidad] || 200,
+    const res = await registerPatient({
+      nombre: newPatientForm.nombre,
+      dni: newPatientForm.dni,
+      edad: newPatientForm.edad,
+      localidad: newPatientForm.localidad,
     });
 
     if (res.success && res.patient) {
@@ -163,30 +138,40 @@ export const AsistenteSocialPortal: React.FC = () => {
     }
   };
 
-  const handleBookForFamily = (e: React.FormEvent) => {
+  // Disponibilidad real para el modal de "solicitar turno para la familia"
+  const [aptSlots, setAptSlots] = useState<AvailableSlot[]>([]);
+  const [loadingAptSlots, setLoadingAptSlots] = useState(false);
+  const [selectedAptSlotId, setSelectedAptSlotId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!showNewAptModal) return;
+    const servicio = specialties.find((s) => s.nombre === newAptForm.especialidad);
+    if (!servicio) return;
+    setLoadingAptSlots(true);
+    setSelectedAptSlotId(null);
+    getSlotsDisponibles({
+      servicioId: servicio.id,
+      profesionalId: undefined,
+      tipoAgenda: servicio.tipoAgenda,
+    })
+      .then(setAptSlots)
+      .finally(() => setLoadingAptSlots(false));
+  }, [showNewAptModal, newAptForm.especialidad, specialties]);
+
+  const handleBookForFamily = async (e: React.FormEvent) => {
     e.preventDefault();
     setBookingMsg(null);
+    if (!currentPatient || !selectedAptSlotId) {
+      setBookingMsg({ success: false, text: 'Elegí un horario disponible de la agenda real.' });
+      return;
+    }
 
-    const res = bookAppointment({
+    const res = await bookAppointment({
+      slotId: selectedAptSlotId,
       pacienteId: currentPatient.id,
-      pacienteNombre: currentPatient.nombre,
-      pacienteDni: currentPatient.dni,
-      pacienteEdad: currentPatient.edad,
-      pacienteLocalidad: currentPatient.localidad,
       tutorSolicitanteId: currentPatient.tutorId,
-      tutorSolicitanteNombre: currentPatient.tutor,
-      tutorSolicitanteRelacion: currentPatient.relacionConTutor,
-      tutorSolicitanteTelefono: currentPatient.telefono,
-      especialidad: newAptForm.especialidad,
-      tipoPrestacion: newAptForm.tipoPrestacion,
-      tipoAgenda: newAptForm.tipoAgenda,
-      profesional: newAptForm.profesional,
-      fecha: newAptForm.fecha,
-      hora: newAptForm.hora,
       origenCanal: 'asistente_social',
-      tieneDerivacion: true,
       motivoResumido: newAptForm.motivo,
-      tipoConsulta: 'Primera consulta',
     });
 
     if (res.success) {
@@ -293,6 +278,12 @@ export const AsistenteSocialPortal: React.FC = () => {
 
         {/* Right Column: Selected Patient Profile + Trip Optimization Panel */}
         <div className="lg:col-span-8 space-y-6">
+          {!currentPatient ? (
+            <div className="bg-white rounded-2xl p-10 border border-stone-200 shadow-2xs text-center text-stone-400 text-sm">
+              No hay pacientes del interior registrados todavía. Usá "+ Nuevo" para dar de alta al primero.
+            </div>
+          ) : (
+          <>
           {/* Patient Card */}
           <div className="bg-white rounded-2xl p-5 border border-stone-200 shadow-2xs space-y-4">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-stone-100 pb-4">
@@ -443,7 +434,11 @@ export const AsistenteSocialPortal: React.FC = () => {
                       Encontramos una alternativa que permite realizar las {optimizationResult.affectedAppointments.length} prestaciones en un mismo viaje
                     </h4>
                     <p className="text-xs text-stone-600 mt-0.5">
-                      Coordinación lograda para el día <span className="font-bold text-emerald-900">Miércoles 16 de septiembre de 2026</span> con pausas clínicas entre estudios.
+                      {optimizationResult.proposedDate ? (
+                        <>Día propuesto con mayor concentración de disponibilidad real: <span className="font-bold text-emerald-900">{optimizationResult.proposedDate}</span>.</>
+                      ) : (
+                        'No encontramos un día con disponibilidad real para agrupar todas las prestaciones; te sugerimos coordinar manualmente.'
+                      )}
                     </p>
                   </div>
                 </div>
@@ -464,24 +459,18 @@ export const AsistenteSocialPortal: React.FC = () => {
                   </div>
                 </div>
 
-                {/* Proposed unified day schedule */}
+                {/* Turnos actuales del paciente (la reasignación final la confirma un humano) */}
                 <div className="bg-white p-3 rounded-lg border border-emerald-200 space-y-2">
                   <span className="text-xs font-bold text-stone-800 block">
-                    Cronograma coordinado para el Miércoles 16 de septiembre:
+                    Prestaciones pendientes a coordinar:
                   </span>
                   <div className="space-y-1.5">
-                    <div className="flex items-center justify-between text-xs py-1 border-b border-stone-100">
-                      <span className="font-medium text-stone-700">1. Laboratorio (Extracción en ayunas)</span>
-                      <span className="font-bold text-emerald-800">08:30 hs • Lab Central</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs py-1 border-b border-stone-100">
-                      <span className="font-medium text-stone-700">2. Cardiología Pediátrica (Evaluación)</span>
-                      <span className="font-bold text-emerald-800">10:30 hs • Consultorio 12</span>
-                    </div>
-                    <div className="flex items-center justify-between text-xs py-1">
-                      <span className="font-medium text-stone-700">3. Nutrición (Plan de crecimiento)</span>
-                      <span className="font-bold text-emerald-800">13:00 hs • Consultorio 3</span>
-                    </div>
+                    {optimizationResult.affectedAppointments.map((apt, idx) => (
+                      <div key={apt.id} className="flex items-center justify-between text-xs py-1 border-b border-stone-100 last:border-0">
+                        <span className="font-medium text-stone-700">{idx + 1}. {apt.especialidad}</span>
+                        <span className="font-bold text-emerald-800">{apt.fecha} • {apt.hora} hs</span>
+                      </div>
+                    ))}
                   </div>
                 </div>
 
@@ -538,6 +527,8 @@ export const AsistenteSocialPortal: React.FC = () => {
               </div>
             )}
           </div>
+          </>
+          )}
         </div>
       </div>
 
@@ -717,59 +708,28 @@ export const AsistenteSocialPortal: React.FC = () => {
                 </select>
               </div>
 
-              {newAptForm.tipoAgenda === 'PROFESIONAL' ? (
-                <div>
-                  <label className="text-[11px] font-bold text-stone-600 block uppercase mb-1">Profesional</label>
+              <div>
+                <label className="text-[11px] font-bold text-stone-600 block uppercase mb-1">
+                  Horario disponible (agenda real, hasta 30 días)
+                </label>
+                {loadingAptSlots ? (
+                  <p className="text-stone-500 text-xs py-2">Cargando disponibilidad…</p>
+                ) : aptSlots.length === 0 ? (
+                  <p className="text-rose-700 text-xs py-2 font-semibold">No hay horarios disponibles para este servicio.</p>
+                ) : (
                   <select
-                    value={newAptForm.profesional}
-                    onChange={(e) => setNewAptForm({ ...newAptForm, profesional: e.target.value })}
+                    value={selectedAptSlotId || ''}
+                    onChange={(e) => setSelectedAptSlotId(e.target.value || null)}
                     className="w-full text-xs p-2.5 rounded-xl border border-stone-200 bg-stone-50"
                   >
-                    {doctors
-                      .filter((d) => d.especialidad === newAptForm.especialidad)
-                      .map((d) => (
-                        <option key={d.id} value={d.nombre}>
-                          {d.nombre} {d.ausente ? '(Ausente con reemplazo)' : ''}
-                        </option>
-                      ))}
+                    <option value="">Seleccionar horario…</option>
+                    {aptSlots.map((s) => (
+                      <option key={s.slotId} value={s.slotId}>
+                        {s.fecha} {s.hora} hs — {s.profesional}
+                      </option>
+                    ))}
                   </select>
-                </div>
-              ) : (
-                <div className="bg-stone-50 p-2.5 rounded-xl border border-stone-200 text-xs text-stone-600">
-                  <span className="font-bold text-teal-800">Turno por servicio: </span>
-                  El médico de guardia/servicio se asignará al momento de la llegada al hospital.
-                </div>
-              )}
-
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-[11px] font-bold text-stone-600 block uppercase mb-1">
-                    Fecha (hasta 30 días)
-                  </label>
-                  <input
-                    type="date"
-                    required
-                    value={newAptForm.fecha}
-                    onChange={(e) => setNewAptForm({ ...newAptForm, fecha: e.target.value })}
-                    className="w-full text-xs p-2.5 rounded-xl border border-stone-200 bg-stone-50"
-                  />
-                </div>
-                <div>
-                  <label className="text-[11px] font-bold text-stone-600 block uppercase mb-1">Hora</label>
-                  <select
-                    value={newAptForm.hora}
-                    onChange={(e) => setNewAptForm({ ...newAptForm, hora: e.target.value })}
-                    className="w-full text-xs p-2.5 rounded-xl border border-stone-200 bg-stone-50"
-                  >
-                    <option value="08:30">08:30 hs</option>
-                    <option value="09:00">09:00 hs</option>
-                    <option value="09:30">09:30 hs</option>
-                    <option value="10:00">10:00 hs</option>
-                    <option value="10:30">10:30 hs</option>
-                    <option value="11:00">11:00 hs</option>
-                    <option value="11:30">11:30 hs</option>
-                  </select>
-                </div>
+                )}
               </div>
 
               <div>

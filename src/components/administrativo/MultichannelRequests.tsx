@@ -51,13 +51,10 @@ export const MultichannelRequests: React.FC = () => {
 
   const handleReviewAndAssign = (req: InboundRequest) => {
     setActivePrefill({
-      pacienteNombre: req.interpretacion.pacienteNombre,
       especialidad: req.interpretacion.especialidad,
-      localidad: req.interpretacion.localidad,
       origenCanal: req.canal,
       motivo: req.mensajeOriginal,
-      fecha: '2026-09-09',
-      hora: '11:30',
+      requestId: req.id,
     });
     setShowModal(true);
   };

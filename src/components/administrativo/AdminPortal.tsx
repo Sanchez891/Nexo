@@ -54,13 +54,18 @@ export const AdminPortal: React.FC = () => {
   const [showAbsenceModal, setShowAbsenceModal] = useState(false);
 
   // Absence modal state
-  const [selectedDoctorAbsence, setSelectedDoctorAbsence] = useState('d5'); // Dra. Ana Ruiz
+  const [selectedDoctorAbsence, setSelectedDoctorAbsence] = useState('');
   const [absenceReason, setAbsenceReason] = useState('Licencia médica imprevista');
   const [reassignSuccess, setReassignSuccess] = useState<string | null>(null);
 
   // Delay modal state
-  const [selectedDoctorDelay, setSelectedDoctorDelay] = useState('d1'); // Dr. Juan Pérez
+  const [selectedDoctorDelay, setSelectedDoctorDelay] = useState('');
   const [delayMinutes, setDelayMinutes] = useState(30);
+
+  React.useEffect(() => {
+    if (!selectedDoctorAbsence && doctors[0]) setSelectedDoctorAbsence(doctors[0].id);
+    if (!selectedDoctorDelay && doctors[0]) setSelectedDoctorDelay(doctors[0].id);
+  }, [doctors]);
 
   // Urgency form state
   const [urgencyForm, setUrgencyForm] = useState({
@@ -75,7 +80,7 @@ export const AdminPortal: React.FC = () => {
   });
 
   // REAL STATUS INDICATORS (Requirement 17)
-  const hoyStr = '2026-09-09';
+  const hoyStr = new Date().toISOString().slice(0, 10);
   const aptsHoy = appointments.filter((a) => a.fecha === hoyStr);
   const turnosHoyCount = aptsHoy.length;
   const enEsperaCount = aptsHoy.filter((a) => a.estado === 'EN_ESPERA').length;
@@ -124,14 +129,13 @@ export const AdminPortal: React.FC = () => {
     setActiveView('urgencias');
   };
 
-  const handleSaveDelay = () => {
-    reportDoctorDelay(selectedDoctorDelay, delayMinutes);
+  const handleSaveDelay = async () => {
+    await reportDoctorDelay(selectedDoctorDelay, delayMinutes);
     setShowDelayModal(false);
   };
 
-  const handleSaveAbsence = () => {
-    reportDoctorAbsence(selectedDoctorAbsence, absenceReason);
-    setShowAbsenceModal(false);
+  const handleSaveAbsence = async () => {
+    await reportDoctorAbsence(selectedDoctorAbsence, absenceReason);
   };
 
   return (
@@ -262,81 +266,100 @@ export const AdminPortal: React.FC = () => {
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
-            {/* Situation 1: Delay */}
-            <div className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 text-xs space-y-1.5">
-              <div className="flex items-center justify-between font-bold text-amber-900">
-                <span>Dr. Juan Pérez</span>
-                <span className="bg-amber-200/80 text-amber-950 px-2 py-0.5 rounded-md text-[10px]">
-                  Demora: 30 min
-                </span>
+            {/* Situation 1: Delays (real) */}
+            {doctorsWithDelay.length === 0 ? (
+              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs text-stone-500">
+                Sin demoras reportadas hoy.
               </div>
-              <p className="text-stone-600 text-[11px] leading-tight">
-                Cardiología Pediátrica • 6 familias informadas en sala y portal familiar.
-              </p>
-              <button
-                onClick={() => setShowDelayModal(true)}
-                className="text-[11px] font-bold text-amber-900 hover:underline pt-1 inline-flex items-center gap-1"
-              >
-                <span>Ajustar aviso de demora</span> →
-              </button>
-            </div>
+            ) : (
+              doctorsWithDelay.slice(0, 1).map((d) => (
+                <div key={d.id} className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between font-bold text-amber-900">
+                    <span>{d.nombre}</span>
+                    <span className="bg-amber-200/80 text-amber-950 px-2 py-0.5 rounded-md text-[10px]">
+                      Demora: {d.demoraMinutos} min
+                    </span>
+                  </div>
+                  <p className="text-stone-600 text-[11px] leading-tight">
+                    {d.especialidad} • Notificado en sala y portal familiar.
+                  </p>
+                  <button
+                    onClick={() => setShowDelayModal(true)}
+                    className="text-[11px] font-bold text-amber-900 hover:underline pt-1 inline-flex items-center gap-1"
+                  >
+                    <span>Ajustar aviso de demora</span> →
+                  </button>
+                </div>
+              ))
+            )}
 
-            {/* Situation 2: Cancelled slot with compatible waitlist */}
+            {/* Situation 2: Lista de espera con candidatos (real) */}
             <div className="bg-teal-50/80 p-3 rounded-xl border border-teal-200 text-xs space-y-1.5">
               <div className="flex items-center justify-between font-bold text-teal-950">
-                <span>Neurología</span>
+                <span>Lista de espera activa</span>
                 <span className="bg-teal-200/80 text-teal-950 px-2 py-0.5 rounded-md text-[10px]">
-                  1 turno liberado
+                  {listaEsperaCount} en espera
                 </span>
               </div>
               <p className="text-stone-600 text-[11px] leading-tight">
-                4 pacientes compatibles en lista de espera (prioridad interior Goya y Mercedes).
+                Al cancelar un turno, el sistema busca automáticamente candidatos compatibles.
               </p>
               <button
                 onClick={() => setActiveView('lista-espera')}
                 className="text-[11px] font-bold text-teal-800 hover:underline pt-1 inline-flex items-center gap-1"
               >
-                <span>Asignar a candidato en espera</span> →
+                <span>Ver lista de espera</span> →
               </button>
             </div>
 
-            {/* Situation 3: Service Queue High waiting */}
+            {/* Situation 3: Turnos en espera de sala hoy (real) */}
             <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs space-y-1.5">
               <div className="flex items-center justify-between font-bold text-stone-900">
-                <span>Traumatología</span>
+                <span>Sala de espera hoy</span>
                 <span className="bg-stone-200 text-stone-800 px-2 py-0.5 rounded-md text-[10px]">
-                  Cola de servicio
+                  {enEsperaCount} pacientes
                 </span>
               </div>
               <p className="text-stone-600 text-[11px] leading-tight">
-                4 pacientes en sala de espera. Médicos del servicio pueden tomar el siguiente caso.
+                Pacientes con check-in registrado esperando ser llamados a consultorio.
               </p>
               <button
                 onClick={() => setActiveView('agenda')}
                 className="text-[11px] font-bold text-stone-700 hover:underline pt-1 inline-flex items-center gap-1"
               >
-                <span>Ver cola de Traumatología</span> →
+                <span>Ver agenda centralizada</span> →
               </button>
             </div>
 
-            {/* Situation 4: Absence with reassignment */}
-            <div className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-xs space-y-1.5">
-              <div className="flex items-center justify-between font-bold text-rose-900">
-                <span>Dra. Ana Ruiz (Ausente)</span>
-                <span className="bg-rose-200/80 text-rose-950 px-2 py-0.5 rounded-md text-[10px]">
-                  Licencia médica
-                </span>
+            {/* Situation 4: Absences (real) */}
+            {absentDoctors.length === 0 ? (
+              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs text-stone-500">
+                Sin ausencias reportadas hoy.
               </div>
-              <p className="text-stone-600 text-[11px] leading-tight">
-                Neurología • Reubicación automática disponible con Dr. Esteban Romero.
-              </p>
-              <button
-                onClick={() => setShowAbsenceModal(true)}
-                className="text-[11px] font-bold text-rose-800 hover:underline pt-1 inline-flex items-center gap-1"
-              >
-                <span>Reubicar turnos afectados</span> →
-              </button>
-            </div>
+            ) : (
+              absentDoctors.slice(0, 1).map((d) => (
+                <div key={d.id} className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-xs space-y-1.5">
+                  <div className="flex items-center justify-between font-bold text-rose-900">
+                    <span>{d.nombre} (Ausente)</span>
+                    <span className="bg-rose-200/80 text-rose-950 px-2 py-0.5 rounded-md text-[10px]">
+                      {d.motivoAusencia || 'Licencia médica'}
+                    </span>
+                  </div>
+                  <p className="text-stone-600 text-[11px] leading-tight">
+                    {d.especialidad} • Reubicá manualmente los turnos afectados.
+                  </p>
+                  <button
+                    onClick={() => {
+                      setSelectedDoctorAbsence(d.id);
+                      setShowAbsenceModal(true);
+                    }}
+                    className="text-[11px] font-bold text-rose-800 hover:underline pt-1 inline-flex items-center gap-1"
+                  >
+                    <span>Reubicar turnos afectados</span> →
+                  </button>
+                </div>
+              ))
+            )}
           </div>
         </div>
       </div>
@@ -868,12 +891,14 @@ export const AdminPortal: React.FC = () => {
                         </div>
 
                         <button
-                          onClick={() => {
-                            reassignDoctorAppointment(apt.id, alternativeDoc.nombre, alternativeDoc.id);
+                          onClick={async () => {
+                            const ok = await reassignDoctorAppointment(apt.id, alternativeDoc.nombre, alternativeDoc.id);
                             setReassignSuccess(
-                              `Turno de ${apt.pacienteNombre} reubicado exitosamente con ${alternativeDoc.nombre}.`
+                              ok
+                                ? `Turno de ${apt.pacienteNombre} reubicado exitosamente con ${alternativeDoc.nombre}.`
+                                : `${alternativeDoc.nombre} no tiene un horario libre exactamente a las ${apt.hora} hs. Reprogramalo manualmente desde la agenda.`
                             );
-                            setTimeout(() => setReassignSuccess(null), 2500);
+                            setTimeout(() => setReassignSuccess(null), 3500);
                           }}
                           className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-lg text-xs font-bold shrink-0 self-start sm:self-auto"
                         >

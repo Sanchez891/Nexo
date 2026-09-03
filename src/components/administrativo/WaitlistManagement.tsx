@@ -1,6 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { WaitlistEntry } from '../../types';
+import { AvailableSlot, getSlotsDisponibles } from '../../services/agenda.service';
 import {
   Clock,
   UserCheck,
@@ -15,14 +16,30 @@ import {
 } from 'lucide-react';
 
 export const WaitlistManagement: React.FC = () => {
-  const { waitlist, assignWaitlistCandidate, removeFromWaitlist, doctors } = useHospital();
+  const { waitlist, assignWaitlistCandidate, removeFromWaitlist, specialties } = useHospital();
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedSpecialty, setSelectedSpecialty] = useState('Todas');
   const [assignModalCandidate, setAssignModalCandidate] = useState<WaitlistEntry | null>(null);
 
-  const [assignDate, setAssignDate] = useState('2026-09-09');
-  const [assignTime, setAssignTime] = useState('11:00');
-  const [assignDoctor, setAssignDoctor] = useState('Dr. Juan Pérez');
+  const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
+  const [loadingSlots, setLoadingSlots] = useState(false);
+  const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [assigning, setAssigning] = useState(false);
+
+  useEffect(() => {
+    if (!assignModalCandidate) {
+      setAvailableSlots([]);
+      setSelectedSlotId(null);
+      return;
+    }
+    const servicio = specialties.find((s) => s.nombre === assignModalCandidate.especialidad);
+    if (!servicio) return;
+
+    setLoadingSlots(true);
+    getSlotsDisponibles({ servicioId: servicio.id, tipoAgenda: servicio.tipoAgenda })
+      .then((slots) => setAvailableSlots(slots))
+      .finally(() => setLoadingSlots(false));
+  }, [assignModalCandidate, specialties]);
 
   const filteredWaitlist = waitlist.filter((w) => {
     if (selectedSpecialty !== 'Todas' && w.especialidad !== selectedSpecialty) return false;
@@ -37,14 +54,19 @@ export const WaitlistManagement: React.FC = () => {
     return true;
   });
 
-  const handleConfirmAssign = () => {
-    if (!assignModalCandidate) return;
-    assignWaitlistCandidate(assignModalCandidate.id, undefined, {
-      fecha: assignDate,
-      hora: assignTime,
-      doctor: assignDoctor,
-    });
-    setAssignModalCandidate(null);
+  const handleConfirmAssign = async () => {
+    if (!assignModalCandidate || !selectedSlotId) return;
+    setAssigning(true);
+    try {
+      const result = await assignWaitlistCandidate(assignModalCandidate.id, selectedSlotId);
+      if (!result.success) {
+        alert(result.error || 'No se pudo asignar el turno. Puede que ya se haya reservado, elegí otro horario.');
+        return;
+      }
+      setAssignModalCandidate(null);
+    } finally {
+      setAssigning(false);
+    }
   };
 
   return (
@@ -182,47 +204,25 @@ export const WaitlistManagement: React.FC = () => {
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-stone-700 mb-1">Fecha</label>
-                <select
-                  value={assignDate}
-                  onChange={(e) => setAssignDate(e.target.value)}
-                  className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
-                >
-                  <option value="2026-09-08">Martes 8 de septiembre</option>
-                  <option value="2026-09-09">Miércoles 9 de septiembre</option>
-                  <option value="2026-09-10">Jueves 10 de septiembre</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-stone-700 mb-1">Horario</label>
-                <select
-                  value={assignTime}
-                  onChange={(e) => setAssignTime(e.target.value)}
-                  className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
-                >
-                  <option value="09:00">09:00 hs</option>
-                  <option value="11:00">11:00 hs</option>
-                  <option value="11:30">11:30 hs</option>
-                  <option value="12:00">12:00 hs</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-stone-700 mb-1">Profesional</label>
-                <select
-                  value={assignDoctor}
-                  onChange={(e) => setAssignDoctor(e.target.value)}
-                  className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
-                >
-                  {doctors
-                    .filter((d) => d.especialidad === assignModalCandidate.especialidad)
-                    .map((d) => (
-                      <option key={d.id} value={d.nombre}>
-                        {d.nombre} (Cons. {d.consultorio})
+                <label className="block font-semibold text-stone-700 mb-1">Horario disponible (agenda real)</label>
+                {loadingSlots ? (
+                  <p className="text-stone-500 py-2">Cargando disponibilidad…</p>
+                ) : availableSlots.length === 0 ? (
+                  <p className="text-rose-700 py-2">No hay horarios disponibles para este servicio en los próximos 30 días.</p>
+                ) : (
+                  <select
+                    value={selectedSlotId || ''}
+                    onChange={(e) => setSelectedSlotId(e.target.value || null)}
+                    className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
+                  >
+                    <option value="">Seleccionar horario…</option>
+                    {availableSlots.map((s) => (
+                      <option key={s.slotId} value={s.slotId}>
+                        {s.fecha} {s.hora} hs — {s.profesional}
                       </option>
                     ))}
-                </select>
+                  </select>
+                )}
               </div>
             </div>
 
@@ -235,9 +235,10 @@ export const WaitlistManagement: React.FC = () => {
               </button>
               <button
                 onClick={handleConfirmAssign}
-                className="flex-1 py-2.5 text-xs font-bold text-white bg-teal-700 rounded-xl hover:bg-teal-800 shadow-xs"
+                disabled={!selectedSlotId || assigning}
+                className="flex-1 py-2.5 text-xs font-bold text-white bg-teal-700 rounded-xl hover:bg-teal-800 shadow-xs disabled:opacity-60"
               >
-                Confirmar Asignación
+                {assigning ? 'Asignando…' : 'Confirmar Asignación'}
               </button>
             </div>
           </div>

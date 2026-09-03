@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { Appointment, AppointmentStatus, TipoRelacionTutor, Localidad } from '../../types';
 import {
@@ -31,11 +31,14 @@ import {
 } from 'lucide-react';
 import { WebAppointmentWizard } from './WebAppointmentWizard';
 import { FamiliarWaitlist } from './FamiliarWaitlist';
+import { AvailableSlot, getSlotsDisponibles } from '../../services/agenda.service';
+import { realProfesionalId } from '../../services/professionals.service';
 
 export const FamiliarPortal: React.FC = () => {
   const {
     appointments,
     doctors,
+    specialties,
     cancelAppointment,
     rescheduleAppointment,
     tutors,
@@ -55,8 +58,25 @@ export const FamiliarPortal: React.FC = () => {
   const [showRescheduleModal, setShowRescheduleModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
   const [showAddPersonaModal, setShowAddPersonaModal] = useState(false);
-  const [rescheduleDate, setRescheduleDate] = useState('2026-09-10');
-  const [rescheduleTime, setRescheduleTime] = useState('08:15');
+  const [rescheduleSlots, setRescheduleSlots] = useState<AvailableSlot[]>([]);
+  const [loadingRescheduleSlots, setLoadingRescheduleSlots] = useState(false);
+  const [selectedRescheduleSlot, setSelectedRescheduleSlot] = useState<AvailableSlot | null>(null);
+
+  useEffect(() => {
+    if (!showRescheduleModal || !selectedAppointment) return;
+    const servicio = specialties.find((s) => s.nombre === selectedAppointment.especialidad);
+    if (!servicio) return;
+
+    setLoadingRescheduleSlots(true);
+    setSelectedRescheduleSlot(null);
+    getSlotsDisponibles({
+      servicioId: servicio.id,
+      profesionalId: selectedAppointment.profesionalId ? realProfesionalId(selectedAppointment.profesionalId) : undefined,
+      tipoAgenda: servicio.tipoAgenda,
+    })
+      .then(setRescheduleSlots)
+      .finally(() => setLoadingRescheduleSlots(false));
+  }, [showRescheduleModal, selectedAppointment, specialties]);
   const [rescheduleError, setRescheduleError] = useState<string | null>(null);
 
   // New Persona a Cargo Form State
@@ -150,9 +170,9 @@ export const FamiliarPortal: React.FC = () => {
     setShowCancelModal(true);
   };
 
-  const executeReschedule = () => {
-    if (!selectedAppointment) return;
-    const ok = rescheduleAppointment(selectedAppointment.id, rescheduleDate, rescheduleTime);
+  const executeReschedule = async () => {
+    if (!selectedAppointment || !selectedRescheduleSlot) return;
+    const ok = await rescheduleAppointment(selectedAppointment.id, selectedRescheduleSlot.fecha, selectedRescheduleSlot.hora);
     if (ok) {
       setShowRescheduleModal(false);
     } else {
@@ -160,13 +180,13 @@ export const FamiliarPortal: React.FC = () => {
     }
   };
 
-  const executeCancel = () => {
+  const executeCancel = async () => {
     if (!selectedAppointment) return;
-    cancelAppointment(selectedAppointment.id, 'Cancelado por el tutor responsable desde el portal web');
+    await cancelAppointment(selectedAppointment.id, 'Cancelado por el tutor responsable desde el portal web');
     setShowCancelModal(false);
   };
 
-  const handleAddPersonaSubmit = (e: React.FormEvent) => {
+  const handleAddPersonaSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setNewPersonaError(null);
 
@@ -179,15 +199,14 @@ export const FamiliarPortal: React.FC = () => {
       return;
     }
 
-    const res = addPersonaACargo(currentTutor.id, {
+    const res = await addPersonaACargo({
       nombre: newPersonaNombre.trim(),
       apellido: newPersonaApellido.trim(),
       dni: newPersonaDni.trim(),
       fechaNacimiento: newPersonaFechaNac,
       localidad: newPersonaLocalidad,
-      tipoRelacion: newPersonaRelacion,
-      responsablePrincipal: true,
-      autorizadoAGestionarTurnos: newPersonaAutorizado,
+      relacion: newPersonaRelacion,
+      tutorId: currentTutor.id,
     });
 
     if (res.success) {
@@ -461,7 +480,7 @@ export const FamiliarPortal: React.FC = () => {
                         <div>
                           <span className="text-stone-400 block text-[10px]">Fecha</span>
                           <span className="font-bold text-stone-900">
-                            {proximoTurno.fecha === '2026-09-09' ? 'Miércoles 9 de septiembre' : proximoTurno.fecha}
+                            {proximoTurno.fecha}
                           </span>
                         </div>
                       </div>
@@ -905,36 +924,28 @@ export const FamiliarPortal: React.FC = () => {
 
             <div className="space-y-3 text-xs">
               <div>
-                <label className="block font-semibold text-stone-700 mb-1">Nueva fecha</label>
-                <select
-                  value={rescheduleDate}
-                  onChange={(e) => setRescheduleDate(e.target.value)}
-                  className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
-                >
-                  <option value="2026-09-08">Martes 8 de septiembre</option>
-                  <option value="2026-09-09">Miércoles 9 de septiembre</option>
-                  <option value="2026-09-10">Jueves 10 de septiembre</option>
-                </select>
-              </div>
-
-              <div>
-                <label className="block font-semibold text-stone-700 mb-1">Nuevo horario</label>
-                <div className="grid grid-cols-3 gap-2">
-                  {['08:15', '09:30', '11:00', '11:30', '12:00'].map((time) => (
-                    <button
-                      key={time}
-                      type="button"
-                      onClick={() => setRescheduleTime(time)}
-                      className={`py-2 rounded-xl font-bold border transition-all ${
-                        rescheduleTime === time
-                          ? 'bg-teal-700 text-white border-teal-700'
-                          : 'bg-white text-stone-700 border-stone-200 hover:bg-stone-50'
-                      }`}
-                    >
-                      {time} hs
-                    </button>
-                  ))}
-                </div>
+                <label className="block font-semibold text-stone-700 mb-1">Nuevo horario disponible</label>
+                {loadingRescheduleSlots ? (
+                  <p className="text-stone-500 py-2">Cargando disponibilidad real…</p>
+                ) : rescheduleSlots.length === 0 ? (
+                  <p className="text-rose-700 py-2 font-semibold">No hay horarios disponibles para reprogramar este turno.</p>
+                ) : (
+                  <select
+                    value={selectedRescheduleSlot ? `${selectedRescheduleSlot.fecha}|${selectedRescheduleSlot.hora}` : ''}
+                    onChange={(e) => {
+                      const found = rescheduleSlots.find((s) => `${s.fecha}|${s.hora}` === e.target.value);
+                      setSelectedRescheduleSlot(found || null);
+                    }}
+                    className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-stone-800"
+                  >
+                    <option value="">Seleccionar…</option>
+                    {rescheduleSlots.map((s) => (
+                      <option key={`${s.slotId}`} value={`${s.fecha}|${s.hora}`}>
+                        {s.fecha} • {s.hora} hs — {s.profesional}
+                      </option>
+                    ))}
+                  </select>
+                )}
               </div>
 
               {rescheduleError && (
@@ -953,7 +964,8 @@ export const FamiliarPortal: React.FC = () => {
               </button>
               <button
                 onClick={executeReschedule}
-                className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-teal-700 hover:bg-teal-800 text-white shadow-xs"
+                disabled={!selectedRescheduleSlot}
+                className="flex-1 py-2.5 rounded-xl text-xs font-bold bg-teal-700 hover:bg-teal-800 disabled:opacity-60 text-white shadow-xs"
               >
                 Confirmar cambio
               </button>

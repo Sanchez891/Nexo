@@ -27,15 +27,24 @@ export const DoctorPortal: React.FC = () => {
     advanceDemoStep,
   } = useHospital();
 
-  const [selectedDoctorId, setSelectedDoctorId] = useState('d1'); // Dr. Juan Pérez
+  const [selectedDoctorId, setSelectedDoctorId] = useState('');
   const [activePatientApt, setActivePatientApt] = useState<Appointment | null>(null);
   const [showDelayPicker, setShowDelayPicker] = useState(false);
 
   const currentDoctor = doctors.find((d) => d.id === selectedDoctorId) || doctors[0];
+
+  if (!currentDoctor) {
+    return (
+      <div className="max-w-5xl mx-auto px-4 py-10 text-center text-stone-500 text-sm">
+        No hay profesionales cargados en el sistema todavía.
+      </div>
+    );
+  }
+
   const isServiceAgenda = currentDoctor.tipoAgenda === 'SERVICIO';
 
-  // Appointments for this doctor or service on 2026-09-09
-  const todayDate = '2026-09-09';
+  // Turnos del día de hoy (fecha real, no simulada)
+  const todayDate = new Date().toISOString().slice(0, 10);
 
   const relevantAppointments = appointments.filter((a) => {
     if (a.fecha !== todayDate || a.estado === 'CANCELADO') return false;
@@ -51,23 +60,23 @@ export const DoctorPortal: React.FC = () => {
   const attendedPatients = relevantAppointments.filter((a) => a.estado === 'ATENDIDO');
 
   // Handle calling the next patient from queue (SCENE 3)
-  const handleCallNextPatient = (apt: Appointment) => {
-    updateAppointmentStatus(apt.id, 'EN_CONSULTORIO');
+  const handleCallNextPatient = async (apt: Appointment) => {
+    await updateAppointmentStatus(apt.id, 'EN_CONSULTORIO');
     setActivePatientApt({ ...apt, estado: 'EN_CONSULTORIO' });
     advanceDemoStep();
   };
 
   // Handle completing consultation (SCENE 3)
-  const handleFinishConsultation = (aptId: string) => {
-    updateAppointmentStatus(aptId, 'ATENDIDO');
+  const handleFinishConsultation = async (aptId: string) => {
+    await updateAppointmentStatus(aptId, 'ATENDIDO');
     if (activePatientApt?.id === aptId) {
       setActivePatientApt(null);
     }
     advanceDemoStep();
   };
 
-  const handleMarkNoShow = (aptId: string) => {
-    updateAppointmentStatus(aptId, 'NO_ASISTIO');
+  const handleMarkNoShow = async (aptId: string) => {
+    await updateAppointmentStatus(aptId, 'NO_ASISTIO');
     if (activePatientApt?.id === aptId) {
       setActivePatientApt(null);
     }
@@ -317,7 +326,7 @@ export const DoctorPortal: React.FC = () => {
       <div className="bg-white rounded-3xl border border-stone-200 shadow-2xs overflow-hidden">
         <div className="px-6 py-4 border-b border-stone-100 flex items-center justify-between">
           <span className="font-bold text-sm text-stone-900">
-            Todos los turnos de la jornada (Miércoles 9 de septiembre)
+            Todos los turnos de la jornada ({todayDate})
           </span>
           <span className="text-xs text-stone-500">
             {relevantAppointments.length} turnos programados

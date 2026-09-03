@@ -44,7 +44,7 @@ export const CentralizedAgenda: React.FC = () => {
 
   // Mode: Por servicio vs Por profesional (Requirements 9 & 10)
   const [agendaMode, setAgendaMode] = useState<TipoAgenda>('SERVICIO');
-  const [selectedFecha, setSelectedFecha] = useState('2026-09-09');
+  const [selectedFecha, setSelectedFecha] = useState(new Date().toISOString().slice(0, 10));
   const [selectedEspecialidad, setSelectedEspecialidad] = useState('Todas');
   const [selectedProfesional, setSelectedProfesional] = useState('Todos');
   const [selectedEstado, setSelectedEstado] = useState('Todos');
@@ -127,13 +127,10 @@ export const CentralizedAgenda: React.FC = () => {
     }
   };
 
-  const handleOpenAssignFreeSlot = (hour: string) => {
+  const handleOpenAssignFreeSlot = () => {
     setNewModalPrefill({
-      fecha: selectedFecha,
-      hora: hour,
       tipoAgenda: agendaMode,
-      profesional: agendaMode === 'PROFESIONAL' ? selectedProfesional : 'Se asignará al momento de la atención',
-      especialidad: selectedEspecialidad !== 'Todas' ? selectedEspecialidad : 'Traumatología Pediátrica',
+      especialidad: selectedEspecialidad !== 'Todas' ? selectedEspecialidad : undefined,
     });
     setShowNewModal(true);
   };
@@ -179,8 +176,9 @@ export const CentralizedAgenda: React.FC = () => {
                   <span className="text-[11px] text-stone-500">{c.localidad} • Tel: {c.telefono}</span>
                 </div>
                 <button
-                  onClick={() => {
-                    assignWaitlistCandidate(c.id);
+                  onClick={async () => {
+                    if (!releasedSlotAlert) return;
+                    await assignWaitlistCandidate(c.id, releasedSlotAlert.slotId);
                     advanceDemoStep();
                   }}
                   className="px-2.5 py-1.5 bg-teal-700 hover:bg-teal-800 text-white font-bold rounded-lg text-[11px] shadow-2xs transition-colors shrink-0"
@@ -280,19 +278,12 @@ export const CentralizedAgenda: React.FC = () => {
           <label className="block text-[11px] font-bold uppercase tracking-wider text-stone-500 mb-1">
             Fecha de agenda
           </label>
-          <select
+          <input
+            type="date"
             value={selectedFecha}
             onChange={(e) => setSelectedFecha(e.target.value)}
             className="w-full bg-stone-50 border border-stone-200 rounded-xl px-3 py-2 text-xs font-bold text-stone-800"
-          >
-            <option value="2026-09-08">Martes 8 de septiembre</option>
-            <option value="2026-09-09">Miércoles 9 de septiembre (Hoy)</option>
-            <option value="2026-09-10">Jueves 10 de septiembre</option>
-            <option value="2026-09-11">Viernes 11 de septiembre</option>
-            <option value="2026-09-14">Lunes 14 de septiembre</option>
-            <option value="2026-09-15">Martes 15 de septiembre</option>
-            <option value="2026-09-16">Miércoles 16 de septiembre (Optimizado)</option>
-          </select>
+          />
         </div>
 
         {agendaMode === 'SERVICIO' ? (
@@ -384,7 +375,7 @@ export const CentralizedAgenda: React.FC = () => {
           <div className="p-12 text-center text-stone-400 text-xs space-y-2">
             <p>No hay turnos registrados con los filtros seleccionados.</p>
             <button
-              onClick={() => handleOpenAssignFreeSlot('10:00')}
+              onClick={() => handleOpenAssignFreeSlot()}
               className="text-teal-700 font-bold hover:underline"
             >
               + Asignar nuevo turno en este horario
@@ -454,8 +445,8 @@ export const CentralizedAgenda: React.FC = () => {
                     {/* SCENE 2: PENDIENTE_DE_LLEGADA -> Registrar llegada -> EN_ESPERA */}
                     {apt.estado === 'PENDIENTE_DE_LLEGADA' && (
                       <button
-                        onClick={() => {
-                          updateAppointmentStatus(apt.id, 'EN_ESPERA');
+                        onClick={async () => {
+                          await updateAppointmentStatus(apt.id, 'EN_ESPERA');
                           advanceDemoStep();
                         }}
                         className="px-3 py-1.5 bg-teal-700 hover:bg-teal-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
@@ -469,8 +460,8 @@ export const CentralizedAgenda: React.FC = () => {
                     {/* SCENE 3: EN_ESPERA -> Llamar / En consultorio -> EN_CONSULTORIO */}
                     {apt.estado === 'EN_ESPERA' && (
                       <button
-                        onClick={() => {
-                          updateAppointmentStatus(apt.id, 'EN_CONSULTORIO');
+                        onClick={async () => {
+                          await updateAppointmentStatus(apt.id, 'EN_CONSULTORIO');
                           advanceDemoStep();
                         }}
                         className="px-3 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
@@ -483,9 +474,7 @@ export const CentralizedAgenda: React.FC = () => {
                     {/* EN_CONSULTORIO -> Finalizar atención -> ATENDIDO */}
                     {apt.estado === 'EN_CONSULTORIO' && (
                       <button
-                        onClick={() => {
-                          updateAppointmentStatus(apt.id, 'ATENDIDO');
-                        }}
+                        onClick={() => updateAppointmentStatus(apt.id, 'ATENDIDO')}
                         className="px-3 py-1.5 bg-emerald-700 hover:bg-emerald-800 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs transition-colors"
                       >
                         <CheckCircle2 className="w-3.5 h-3.5" />
@@ -505,8 +494,8 @@ export const CentralizedAgenda: React.FC = () => {
                         </button>
 
                         <button
-                          onClick={() => {
-                            cancelAppointment(apt.id, 'Cancelado desde la agenda centralizada');
+                          onClick={async () => {
+                            await cancelAppointment(apt.id, 'Cancelado desde la agenda centralizada');
                             advanceDemoStep();
                           }}
                           className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-800 rounded-xl text-xs font-semibold border border-rose-200 transition-colors"
@@ -590,8 +579,12 @@ export const CentralizedAgenda: React.FC = () => {
                 </button>
                 <button
                   type="button"
-                  onClick={() => {
-                    rescheduleAppointment(rescheduleModalApt.id, rescheduleModalApt.fecha, newRescheduleTime);
+                  onClick={async () => {
+                    const ok = await rescheduleAppointment(rescheduleModalApt.id, rescheduleModalApt.fecha, newRescheduleTime);
+                    if (!ok) {
+                      alert('No hay un turno disponible exactamente en ese horario para reprogramar. Probá otro horario.');
+                      return;
+                    }
                     setRescheduleModalApt(null);
                   }}
                   className="flex-1 py-2 text-xs font-bold text-white bg-teal-700 rounded-xl hover:bg-teal-800 shadow-xs"
