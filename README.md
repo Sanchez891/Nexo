@@ -145,6 +145,9 @@ supabase/
                          marcar_no_asistio, candidatos_lista_espera,
                          turnos_afectados_por_ausencia)
     0003_rls.sql         Row Level Security + políticas
+    0004_tiempos_atencion.sql  columnas hora_checkin / hora_inicio_atencion /
+                         hora_fin_atencion en turnos (para el tiempo
+                         promedio de atención real de Métricas e Impacto)
   seed.sql               datos de demostración (ficticios)
   tests/booking_rules.sql pruebas SQL manuales de las reglas críticas
 
@@ -175,14 +178,24 @@ intentan el mismo horario al mismo tiempo, una gana y la otra recibe
 `SLOT_NO_DISPONIBLE`, que el frontend traduce como *"Este horario acaba de
 ser reservado. Elegí otra opción disponible."*
 
+En los flujos de reserva Web y WhatsApp, la familia **no elige profesional**:
+al confirmar un horario con cupo en más de un profesional del servicio, el
+sistema asigna automáticamente al que tenga menos turnos activos en ese
+servicio (`agenda.service.ts#pickBalancedSlot`), para repartir la agenda de
+forma equitativa y no sobrecargar siempre al mismo médico. El panel
+Administrativo y el de Asistente Social sí permiten elegir un profesional
+puntual, porque ahí tiene sentido operativamente.
+
 ## Pendiente / fuera de alcance de esta iteración
 
 - **Solicitudes multicanal (`inboundRequests`) y Urgencias 24h
   (`urgencies`)**: siguen en memoria local (no persisten en Supabase). No
   forman parte del modelo de datos pedido explícitamente en la consigna
   (turnos/agenda/lista de espera/tutores/pacientes/servicios/profesionales sí
-  están completamente migrados). Quedan documentadas acá para la próxima
-  iteración.
+  están completamente migrados). El acceso a la bandeja de solicitudes se
+  sacó de la navegación del panel Administrativo (seguía siendo simulada);
+  el componente (`MultichannelRequests.tsx`) queda en el código para la
+  próxima iteración.
 - **Supabase Auth real por tutor/profesional**: la capa está preparada
   (`auth.service.ts`, políticas RLS estrictas comentadas) pero no activada;
   hoy se navega por rol con el selector de modo demo.
