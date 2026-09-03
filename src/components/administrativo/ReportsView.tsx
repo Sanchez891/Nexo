@@ -1,10 +1,12 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { useHospital } from '../../context/HospitalContext';
+import { getTiempoPromedioAtencionMinutos } from '../../services/appointments.service';
 import {
   CalendarCheck,
   AlertOctagon,
   XCircle,
   Clock,
+  Timer,
   MapPin,
   MessageSquare,
   Phone,
@@ -25,6 +27,17 @@ const CHANNEL_META: Record<string, { label: string; icon: React.ReactNode }> = {
 
 export const ReportsView: React.FC = () => {
   const { appointments, waitlist } = useHospital();
+
+  const [tiempoPromedioAtencion, setTiempoPromedioAtencion] = useState<number | null>(null);
+  const [loadingTiempoAtencion, setLoadingTiempoAtencion] = useState(true);
+
+  useEffect(() => {
+    setLoadingTiempoAtencion(true);
+    getTiempoPromedioAtencionMinutos()
+      .then(setTiempoPromedioAtencion)
+      .catch(() => setTiempoPromedioAtencion(null))
+      .finally(() => setLoadingTiempoAtencion(false));
+  }, [appointments]);
 
   const total = appointments.length;
   const activos = appointments.filter((a) => a.estado !== 'CANCELADO');
@@ -62,7 +75,7 @@ export const ReportsView: React.FC = () => {
   return (
     <div className="space-y-6">
       {/* Top Metrics Grid — calculado en vivo sobre los turnos reales */}
-      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+      <div className="grid grid-cols-2 lg:grid-cols-5 gap-3">
         <div className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs">
           <div className="flex items-center justify-between text-stone-400 mb-1">
             <span className="text-[11px] font-bold uppercase tracking-wider">Turnos Registrados</span>
@@ -70,6 +83,19 @@ export const ReportsView: React.FC = () => {
           </div>
           <div className="text-2xl font-extrabold text-stone-900">{total}</div>
           <span className="text-[11px] text-stone-500 font-semibold">En la agenda central</span>
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs">
+          <div className="flex items-center justify-between text-stone-400 mb-1">
+            <span className="text-[11px] font-bold uppercase tracking-wider">Tiempo Prom. de Atención</span>
+            <Timer className="w-4 h-4 text-teal-700" />
+          </div>
+          <div className="text-2xl font-extrabold text-stone-900">
+            {loadingTiempoAtencion ? '…' : tiempoPromedioAtencion !== null ? `${Math.round(tiempoPromedioAtencion)} min` : '—'}
+          </div>
+          <span className="text-[11px] text-stone-500 font-semibold">
+            {tiempoPromedioAtencion !== null ? 'Desde ingreso a consultorio hasta finalizar' : 'Sin atenciones finalizadas todavía'}
+          </span>
         </div>
 
         <div className="bg-white p-4 rounded-2xl border border-stone-200 shadow-2xs">

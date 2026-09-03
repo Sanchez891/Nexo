@@ -205,6 +205,29 @@ export async function finalizarTurno(turnoId: string): Promise<Appointment> {
   return turno;
 }
 
+/** Tiempo promedio de atención real (EN_CONSULTORIO -> ATENDIDO), en
+ * minutos, sobre los turnos ya atendidos que tienen ambos timestamps. */
+export async function getTiempoPromedioAtencionMinutos(): Promise<number | null> {
+  const { data, error } = await supabase
+    .from('turnos')
+    .select('hora_inicio_atencion, hora_fin_atencion')
+    .eq('estado', 'ATENDIDO')
+    .not('hora_inicio_atencion', 'is', null)
+    .not('hora_fin_atencion', 'is', null);
+  if (error) throw error;
+
+  const rows = data || [];
+  if (rows.length === 0) return null;
+
+  const totalMinutos = rows.reduce((sum, row: any) => {
+    const inicio = new Date(row.hora_inicio_atencion).getTime();
+    const fin = new Date(row.hora_fin_atencion).getTime();
+    return sum + Math.max(0, (fin - inicio) / 60000);
+  }, 0);
+
+  return totalMinutos / rows.length;
+}
+
 export async function marcarNoAsistio(turnoId: string): Promise<Appointment> {
   const { error } = await supabase.rpc('marcar_no_asistio', { p_turno_id: turnoId });
   if (error) throw error;

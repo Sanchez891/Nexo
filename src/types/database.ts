@@ -137,6 +137,9 @@ export interface TurnoRow {
   motivo_resumido: string | null;
   observaciones: string | null;
   fecha_creacion: string;
+  hora_checkin: string | null;
+  hora_inicio_atencion: string | null;
+  hora_fin_atencion: string | null;
   created_at: string;
   updated_at: string;
 }

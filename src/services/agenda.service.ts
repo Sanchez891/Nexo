@@ -95,6 +95,60 @@ export async function findSlotExacto(params: {
   return data && data[0] ? data[0].id : null;
 }
 
+/** Cantidad de turnos activos (no cancelados/atendidos/no-show) por
+ * profesional dentro de un servicio, usada para repartir la asignación
+ * automática de forma equitativa y no sobrecargar siempre al mismo médico. */
+export async function getCargaPorProfesional(
+  servicioId: string,
+  profesionalIds: string[]
+): Promise<Record<string, number>> {
+  const counts: Record<string, number> = {};
+  const ids = Array.from(new Set(profesionalIds.filter(Boolean)));
+  ids.forEach((id) => {
+    counts[id] = 0;
+  });
+  if (ids.length === 0) return counts;
+
+  const { data, error } = await supabase
+    .from('turnos')
+    .select('profesional_id')
+    .eq('servicio_id', servicioId)
+    .in('profesional_id', ids)
+    .not('estado', 'in', '(CANCELADO,ATENDIDO,NO_ASISTIO)');
+  if (error) throw error;
+
+  (data || []).forEach((row: any) => {
+    if (row.profesional_id) counts[row.profesional_id] = (counts[row.profesional_id] || 0) + 1;
+  });
+  return counts;
+}
+
+/** Entre varios slots candidatos para el mismo horario (distintos
+ * profesionales de la misma especialidad), elige el del profesional con
+ * menos turnos activos en curso; ante empate, elige al azar entre los
+ * menos cargados para repartir parejo en el tiempo. */
+export async function pickBalancedSlot(servicioId: string, candidates: AvailableSlot[]): Promise<AvailableSlot> {
+  if (candidates.length <= 1) return candidates[0];
+
+  const profesionalIds = candidates.map((c) => c.profesionalId).filter((id): id is string => Boolean(id));
+  if (profesionalIds.length === 0) return candidates[0];
+
+  const carga = await getCargaPorProfesional(servicioId, profesionalIds);
+
+  let minCount = Infinity;
+  let winners: AvailableSlot[] = [];
+  for (const c of candidates) {
+    const count = c.profesionalId ? carga[c.profesionalId] ?? 0 : 0;
+    if (count < minCount) {
+      minCount = count;
+      winners = [c];
+    } else if (count === minCount) {
+      winners.push(c);
+    }
+  }
+  return winners[Math.floor(Math.random() * winners.length)];
+}
+
 export function filterByPreferenciaHoraria(
   slots: AvailableSlot[],
   preferencia: 'manana' | 'tarde' | 'cualquiera'

@@ -1,8 +1,7 @@
 import React, { useState, useMemo, useEffect } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { TipoAgenda, TipoPrestacion, Localidad, Appointment } from '../../types';
-import { AvailableSlot, filterByPreferenciaHoraria, getSlotsDisponibles, maxBookingDate } from '../../services/agenda.service';
-import { realProfesionalId } from '../../services/professionals.service';
+import { AvailableSlot, filterByPreferenciaHoraria, getSlotsDisponibles, maxBookingDate, pickBalancedSlot } from '../../services/agenda.service';
 import {
   User,
   Clock,
@@ -30,7 +29,6 @@ export type WizardStep =
   | 'PACIENTE'
   | 'HORARIO'
   | 'SERVICIO'
-  | 'PROFESIONAL'
   | 'DIA'
   | 'TURNO'
   | 'RESUMEN'
@@ -54,7 +52,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const {
     currentTutor,
     getPersonasACargo,
-    doctors,
     specialties,
     bookAppointment,
     addToWaitlist,
@@ -71,8 +68,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const [pacienteId, setPacienteId] = useState<string | null>(null);
   const [preferenciaHoraria, setPreferenciaHoraria] = useState<'manana' | 'tarde' | 'cualquiera' | null>(null);
   const [servicioId, setServicioId] = useState<string | null>(null);
-  const [profesionalId, setProfesionalId] = useState<string | null>(null); // null means "Me da igual" or shared service
-  const [isMeDaIgualProfesional, setIsMeDaIgualProfesional] = useState(false);
   const [fechaSeleccionada, setFechaSeleccionada] = useState<string | null>(null);
   const [horaSeleccionada, setHoraSeleccionada] = useState<string | null>(null);
   const [slotProfesionalNombre, setSlotProfesionalNombre] = useState<string | null>(null);
@@ -89,6 +84,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
   const [waitlistDiaDeseadoLabel, setWaitlistDiaDeseadoLabel] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [assigningHora, setAssigningHora] = useState<string | null>(null);
 
   // Slots reales traídos de agenda_slots (Supabase) para el servicio/profesional elegido
   const [rawSlots, setRawSlots] = useState<AvailableSlot[]>([]);
@@ -105,20 +101,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const selectedServicio = useMemo(() => {
     return specialties.find((s) => s.id === servicioId);
   }, [specialties, servicioId]);
-
-  const selectedDoctor = useMemo(() => {
-    if (!profesionalId) return null;
-    return doctors.find((d) => d.id === profesionalId);
-  }, [doctors, profesionalId]);
-
-  // Available doctors for the selected service
-  const serviceDoctors = useMemo(() => {
-    if (!selectedServicio) return [];
-    return doctors.filter(
-      (d) =>
-        d.especialidad.toLowerCase() === selectedServicio.nombre.toLowerCase() && !d.ausente
-    );
-  }, [doctors, selectedServicio]);
 
   // ============================================================================
   // DISPONIBILIDAD REAL: consulta agenda_slots en Supabase (no hay horarios
@@ -142,8 +124,9 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     };
   };
 
-  // Trae los slots DISPONIBLE reales apenas se conoce el servicio y el
-  // profesional preferido (o "me da igual").
+  // Trae los slots DISPONIBLE reales apenas se conoce el servicio. El
+  // profesional ya no lo elige la familia: se asigna automáticamente y de
+  // forma equitativa entre todos los profesionales del servicio.
   useEffect(() => {
     let cancelled = false;
     if (!selectedServicio) {
@@ -154,14 +137,8 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     setLoadingSlots(true);
     setSlotsError(null);
 
-    const profesionalRealId =
-      selectedServicio.tipoAgenda === 'PROFESIONAL' && profesionalId && !isMeDaIgualProfesional
-        ? realProfesionalId(profesionalId)
-        : undefined;
-
     getSlotsDisponibles({
       servicioId: selectedServicio.id,
-      profesionalId: profesionalRealId,
       tipoAgenda: selectedServicio.tipoAgenda,
     })
       .then((slots) => {
@@ -177,7 +154,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     return () => {
       cancelled = true;
     };
-  }, [selectedServicio, profesionalId, isMeDaIgualProfesional]);
+  }, [selectedServicio]);
 
   const slotsForPreferencia = useMemo(
     () => filterByPreferenciaHoraria(rawSlots, preferenciaHoraria || 'cualquiera'),
@@ -238,6 +215,20 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       .sort((a, b) => a.hora.localeCompare(b.hora));
   }, [fechaSeleccionada, slotsForPreferencia]);
 
+  // Horarios únicos disponibles ese día (el profesional queda oculto: puede
+  // haber varios profesionales con el mismo horario, se muestra una sola vez).
+  const horasDisponiblesDelDia = useMemo(() => {
+    const seen = new Set<string>();
+    const list: string[] = [];
+    for (const s of availableSlotsForSelectedDate) {
+      if (!seen.has(s.hora)) {
+        seen.add(s.hora);
+        list.push(s.hora);
+      }
+    }
+    return list;
+  }, [availableSlotsForSelectedDate]);
+
   const selectedDateLabel = useMemo(() => {
     if (!fechaSeleccionada) return '';
     return formatDateLabel(fechaSeleccionada).label;
@@ -271,25 +262,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
   const handleSelectServicio = (id: string) => {
     setServicioId(id);
     // Invalidate downstream choices
-    setProfesionalId(null);
-    setIsMeDaIgualProfesional(false);
-    setFechaSeleccionada(null);
-    setHoraSeleccionada(null);
-    setSlotProfesionalNombre(null);
-
-    const s = specialties.find((spec) => spec.id === id);
-    if (s?.tipoAgenda === 'SERVICIO') {
-      // Shared agenda
-      setProfesionalId(null);
-      setIsMeDaIgualProfesional(true);
-    }
-    setCurrentStep('PROFESIONAL');
-  };
-
-  const handleSelectProfesional = (docId: string | null, meDaIgual: boolean = false) => {
-    setProfesionalId(docId);
-    setIsMeDaIgualProfesional(meDaIgual);
-    // Invalidate downstream day & slot choices
     setFechaSeleccionada(null);
     setHoraSeleccionada(null);
     setSlotProfesionalNombre(null);
@@ -311,13 +283,27 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     setCurrentStep('CONFIRMAR_LISTA_ESPERA');
   };
 
-  const handleSelectSlot = (slot: AvailableSlot) => {
-    setHoraSeleccionada(slot.hora);
-    setSlotProfesionalNombre(slot.profesional);
-    setSlotConsultorio(slot.consultorio);
-    setSelectedSlotId(slot.slotId);
-    setCollisionError(null);
-    setCurrentStep('RESUMEN');
+  // El profesional ya no lo elige la familia: si hay más de un profesional
+  // con cupo en el mismo horario, se asigna automáticamente al que tenga
+  // menos turnos activos (reparto equitativo, evita sobrecargar a uno solo).
+  const handleSelectHora = async (hora: string) => {
+    const candidates = availableSlotsForSelectedDate.filter((s) => s.hora === hora);
+    if (candidates.length === 0 || !selectedServicio) return;
+
+    setAssigningHora(hora);
+    try {
+      const winner = await pickBalancedSlot(selectedServicio.id, candidates);
+      setHoraSeleccionada(winner.hora);
+      setSlotProfesionalNombre(winner.profesional);
+      setSlotConsultorio(winner.consultorio);
+      setSelectedSlotId(winner.slotId);
+      setCollisionError(null);
+      setCurrentStep('RESUMEN');
+    } catch (err: any) {
+      setSlotsError(err?.message || 'No se pudo asignar un profesional. Intentá nuevamente.');
+    } finally {
+      setAssigningHora(null);
+    }
   };
 
   // Back button handler
@@ -329,11 +315,8 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       case 'SERVICIO':
         setCurrentStep('HORARIO');
         break;
-      case 'PROFESIONAL':
-        setCurrentStep('SERVICIO');
-        break;
       case 'DIA':
-        setCurrentStep('PROFESIONAL');
+        setCurrentStep('SERVICIO');
         break;
       case 'TURNO':
         setCurrentStep('DIA');
@@ -394,10 +377,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
         pacienteId: selectedPatient.id,
         tutorId: currentTutor?.id,
         especialidad: selectedServicio.nombre,
-        profesionalPreferidoId:
-          selectedServicio.tipoAgenda === 'PROFESIONAL' && profesionalId && !isMeDaIgualProfesional
-            ? realProfesionalId(profesionalId)
-            : undefined,
         preferenciaHorario: preferenciaHoraria || 'cualquiera',
         localidad: selectedPatient.localidad || currentTutor?.localidad || 'Mercedes',
         origenCanal: 'web',
@@ -425,16 +404,14 @@ export const WebAppointmentWizard: React.FC<Props> = ({
         return 2;
       case 'SERVICIO':
         return 3;
-      case 'PROFESIONAL':
-        return 4;
       case 'DIA':
-        return 5;
+        return 4;
       case 'TURNO':
-        return 6;
+        return 5;
       case 'RESUMEN':
-        return 7;
+        return 6;
       default:
-        return 7;
+        return 6;
     }
   };
 
@@ -442,10 +419,9 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     { num: 1, label: 'Paciente' },
     { num: 2, label: 'Horario' },
     { num: 3, label: 'Servicio' },
-    { num: 4, label: 'Profesional' },
-    { num: 5, label: 'Día' },
-    { num: 6, label: 'Turno' },
-    { num: 7, label: 'Resumen' },
+    { num: 4, label: 'Día' },
+    { num: 5, label: 'Turno' },
+    { num: 6, label: 'Resumen' },
   ];
 
   const currentStepNum = getStepNumber();
@@ -507,7 +483,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                       <span>{st.label}</span>
                       {isCompleted && <Check className="w-3 h-3 text-teal-700" />}
                     </div>
-                    {st.num < 7 && <span className="text-stone-300 mx-0.5">›</span>}
+                    {st.num < stepsList.length && <span className="text-stone-300 mx-0.5">›</span>}
                   </div>
                 );
               })}
@@ -517,7 +493,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
             <div className="w-full bg-stone-100 h-1.5 rounded-full overflow-hidden">
               <div
                 className="bg-teal-700 h-full transition-all duration-300 rounded-full"
-                style={{ width: `${(currentStepNum / 7) * 100}%` }}
+                style={{ width: `${(currentStepNum / stepsList.length) * 100}%` }}
               />
             </div>
 
@@ -534,7 +510,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 </button>
 
                 <span className="text-[11px] text-stone-400 font-medium">
-                  Paso {currentStepNum} de 7
+                  Paso {currentStepNum} de {stepsList.length}
                 </span>
               </div>
             )}
@@ -833,129 +809,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       )}
 
       {/* ==================================================================== */}
-      {/* PASO 4 — PREFERENCIA DE PROFESIONAL */}
-      {/* ==================================================================== */}
-      {currentStep === 'PROFESIONAL' && selectedServicio && (
-        <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-xs space-y-6">
-          <div className="space-y-1">
-            <h3 className="text-base sm:text-lg font-bold text-stone-900">
-              ¿Tenés preferencia por algún profesional?
-            </h3>
-            <p className="text-xs sm:text-sm text-stone-500">
-              Servicio seleccionado: <strong className="text-stone-800 font-semibold">{selectedServicio.nombre}</strong>
-            </p>
-          </div>
-
-          {/* If Service has Shared Agenda (tipoAgenda = SERVICIO) */}
-          {selectedServicio.tipoAgenda === 'SERVICIO' ? (
-            <div className="p-6 rounded-2xl bg-amber-50/70 border border-amber-200/80 space-y-4">
-              <div className="flex items-start gap-3">
-                <div className="w-10 h-10 rounded-xl bg-amber-100 text-amber-800 flex items-center justify-center shrink-0">
-                  <Info className="w-5 h-5" />
-                </div>
-                <div className="space-y-1">
-                  <h4 className="font-bold text-stone-900 text-sm">
-                    Este servicio trabaja con agenda compartida.
-                  </h4>
-                  <p className="text-xs text-stone-600">
-                    El profesional se asignará al momento de la atención en el hospital según el equipo de guardia o consultorios del día.
-                  </p>
-                </div>
-              </div>
-
-              <div className="pt-2 flex justify-end">
-                <button
-                  type="button"
-                  onClick={() => {
-                    handleSelectProfesional(null, true);
-                  }}
-                  className="px-6 py-2.5 rounded-xl bg-teal-700 hover:bg-teal-800 text-white font-bold text-xs transition-colors inline-flex items-center gap-1.5 shadow-xs"
-                >
-                  <span>Continuar a selección de día</span>
-                  <ChevronRight className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          ) : (
-            /* Professional Agenda: list ONLY doctors from this specialty + "Me da igual" */
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {serviceDoctors.map((doc) => {
-                  const isSelected = profesionalId === doc.id && !isMeDaIgualProfesional;
-                  return (
-                    <div
-                      key={doc.id}
-                      onClick={() => handleSelectProfesional(doc.id, false)}
-                      className={`p-4 rounded-2xl border-2 text-left transition-all flex flex-col justify-between cursor-pointer group ${
-                        isSelected
-                          ? 'border-teal-700 bg-teal-50/50 shadow-xs ring-2 ring-teal-700/20'
-                          : 'border-stone-200 hover:border-teal-600 bg-white hover:shadow-xs'
-                      }`}
-                    >
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between">
-                          <h4 className="font-bold text-sm text-stone-900 group-hover:text-teal-800">
-                            {doc.nombre}
-                          </h4>
-                        </div>
-                        <p className="text-xs text-stone-500">
-                          {doc.especialidad} • Consultorio {doc.consultorio}
-                        </p>
-                      </div>
-
-                      <div className="pt-3 mt-2 border-t border-stone-100 flex items-center justify-between text-xs">
-                        <span className="text-[11px] text-stone-400 font-medium">
-                          {doc.diasAtencion}
-                        </span>
-                        <button
-                          type="button"
-                          className="px-3 py-1 rounded-lg bg-stone-100 group-hover:bg-teal-700 group-hover:text-white text-stone-700 text-xs font-bold transition-colors"
-                        >
-                          Seleccionar
-                        </button>
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Card "Me da igual" */}
-                <div
-                  onClick={() => handleSelectProfesional(null, true)}
-                  className={`p-4 rounded-2xl border-2 text-left transition-all flex flex-col justify-between cursor-pointer group ${
-                    isMeDaIgualProfesional
-                      ? 'border-teal-700 bg-teal-50/50 shadow-xs ring-2 ring-teal-700/20'
-                      : 'border-stone-200 hover:border-teal-600 bg-white hover:shadow-xs'
-                  }`}
-                >
-                  <div className="space-y-1">
-                    <h4 className="font-bold text-sm text-stone-900 group-hover:text-teal-800">
-                      Me da igual el profesional
-                    </h4>
-                    <p className="text-xs text-stone-500">
-                      Cualquier profesional disponible del servicio de {selectedServicio.nombre}.
-                    </p>
-                  </div>
-
-                  <div className="pt-3 mt-2 border-t border-stone-100 flex items-center justify-between text-xs">
-                    <span className="text-[11px] text-teal-800 font-semibold">
-                      Mayor disponibilidad de turnos
-                    </span>
-                    <button
-                      type="button"
-                      className="px-3 py-1 rounded-lg bg-stone-100 group-hover:bg-teal-700 group-hover:text-white text-stone-700 text-xs font-bold transition-colors"
-                    >
-                      Seleccionar
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          )}
-        </div>
-      )}
-
-      {/* ==================================================================== */}
-      {/* PASO 5 — SELECCIÓN DEL DÍA */}
+      {/* PASO 4 — SELECCIÓN DEL DÍA */}
       {/* ==================================================================== */}
       {currentStep === 'DIA' && (
         <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-xs space-y-6">
@@ -1015,10 +869,10 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCurrentStep('PROFESIONAL')}
+                  onClick={() => setCurrentStep('SERVICIO')}
                   className="px-4 py-2 rounded-xl bg-white border border-stone-300 text-stone-700 font-bold text-xs hover:bg-stone-50 transition-colors"
                 >
-                  Cambiar profesional
+                  Cambiar servicio
                 </button>
                 <button
                   type="button"
@@ -1104,7 +958,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       )}
 
       {/* ==================================================================== */}
-      {/* PASO 6 — HORARIOS DISPONIBLES */}
+      {/* PASO 5 — HORARIOS DISPONIBLES */}
       {/* ==================================================================== */}
       {currentStep === 'TURNO' && (
         <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-xs space-y-6">
@@ -1113,11 +967,11 @@ export const WebAppointmentWizard: React.FC<Props> = ({
               Elegí un horario
             </h3>
             <p className="text-xs sm:text-sm text-stone-500">
-              Disponibilidad para el <strong className="text-stone-800 font-semibold">{selectedDateLabel}</strong>
+              Disponibilidad para el <strong className="text-stone-800 font-semibold">{selectedDateLabel}</strong>. El profesional se asigna automáticamente para repartir la agenda de forma equitativa.
             </p>
           </div>
 
-          {availableSlotsForSelectedDate.length === 0 ? (
+          {horasDisponiblesDelDia.length === 0 ? (
             <div className="p-6 rounded-2xl bg-stone-50 border border-stone-200 text-center space-y-4">
               <AlertTriangle className="w-6 h-6 text-amber-600 mx-auto" />
               <div className="space-y-1">
@@ -1146,13 +1000,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 </button>
                 <button
                   type="button"
-                  onClick={() => setCurrentStep('PROFESIONAL')}
-                  className="px-4 py-2 rounded-xl bg-white border border-stone-300 text-stone-700 font-bold text-xs hover:bg-stone-50 transition-colors"
-                >
-                  Cambiar profesional
-                </button>
-                <button
-                  type="button"
                   onClick={() => setCurrentStep('CONFIRMAR_LISTA_ESPERA')}
                   className="px-4 py-2 rounded-xl bg-amber-600 hover:bg-amber-700 text-white font-bold text-xs transition-colors shadow-xs"
                 >
@@ -1163,36 +1010,31 @@ export const WebAppointmentWizard: React.FC<Props> = ({
           ) : (
             <div className="space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                {availableSlotsForSelectedDate.map((slot, idx) => {
-                  const isSelected = horaSeleccionada === slot.hora && slotProfesionalNombre === slot.profesional;
+                {horasDisponiblesDelDia.map((hora) => {
+                  const isSelected = horaSeleccionada === hora;
+                  const isAssigning = assigningHora === hora;
                   return (
                     <div
-                      key={`${slot.fecha}-${slot.hora}-${slot.profesional}-${idx}`}
-                      onClick={() => handleSelectSlot(slot)}
+                      key={hora}
+                      onClick={() => !assigningHora && handleSelectHora(hora)}
                       className={`p-4 rounded-2xl border-2 text-left transition-all flex flex-col justify-between cursor-pointer group ${
                         isSelected
                           ? 'border-teal-700 bg-teal-50/50 shadow-xs ring-2 ring-teal-700/20'
                           : 'border-stone-200 hover:border-teal-600 bg-white hover:shadow-xs'
-                      }`}
+                      } ${assigningHora && !isAssigning ? 'opacity-50 pointer-events-none' : ''}`}
                     >
                       <div className="space-y-1">
                         <div className="flex items-center justify-between">
                           <span className="font-bold text-base text-stone-900 group-hover:text-teal-800">
-                            {slot.hora} hs
+                            {hora} hs
                           </span>
                           <span className="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full bg-stone-100 text-stone-600">
-                            {parseInt(slot.hora.split(':')[0], 10) < 13 ? 'Mañana' : 'Tarde'}
+                            {parseInt(hora.split(':')[0], 10) < 13 ? 'Mañana' : 'Tarde'}
                           </span>
                         </div>
 
-                        {/* Professional display (item 11 & 12 of specs) */}
                         <p className="text-xs text-stone-600 font-medium line-clamp-1">
-                          {slot.tipoAgenda === 'SERVICIO'
-                            ? `${selectedServicio?.nombre} • Profesional a asignar`
-                            : slot.profesional}
-                        </p>
-                        <p className="text-[11px] text-stone-400">
-                          {slot.consultorio}
+                          {selectedServicio?.nombre} • Profesional asignado automáticamente
                         </p>
                       </div>
 
@@ -1202,7 +1044,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                           type="button"
                           className="px-3 py-1 rounded-lg bg-teal-700 group-hover:bg-teal-800 text-white text-xs font-bold transition-colors"
                         >
-                          Seleccionar
+                          {isAssigning ? 'Asignando…' : 'Seleccionar'}
                         </button>
                       </div>
                     </div>
@@ -1215,7 +1057,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       )}
 
       {/* ==================================================================== */}
-      {/* PASO 7 — RESUMEN */}
+      {/* PASO 6 — RESUMEN */}
       {/* ==================================================================== */}
       {currentStep === 'RESUMEN' && (
         <div className="bg-white rounded-3xl p-6 border border-stone-200/80 shadow-xs space-y-6">
@@ -1266,7 +1108,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                   Profesional
                 </span>
                 <p className="font-bold text-sm text-stone-900">
-                  {slotProfesionalNombre || selectedDoctor?.nombre || 'Se asignará al momento de la atención'}
+                  {slotProfesionalNombre || 'Se asignará al momento de la atención'}
                 </p>
                 <p className="text-xs text-stone-500">
                   {slotConsultorio || 'Consultorio hospitalario'}
@@ -1423,8 +1265,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 setPacienteId(null);
                 setPreferenciaHoraria(null);
                 setServicioId(null);
-                setProfesionalId(null);
-                setIsMeDaIgualProfesional(false);
                 setFechaSeleccionada(null);
                 setHoraSeleccionada(null);
                 setSlotProfesionalNombre(null);
@@ -1481,12 +1321,6 @@ export const WebAppointmentWizard: React.FC<Props> = ({
               <div>
                 <span className="text-stone-400 block text-[11px]">Preferencia:</span>
                 <strong className="text-stone-900 font-bold capitalize">{preferenciaHoraria || 'Sin preferencia'}</strong>
-              </div>
-              <div>
-                <span className="text-stone-400 block text-[11px]">Profesional:</span>
-                <strong className="text-stone-900 font-bold">
-                  {selectedDoctor?.nombre || 'Sin preferencia'}
-                </strong>
               </div>
             </div>
             {waitlistDiaDeseadoLabel && (
