@@ -87,6 +87,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     posicion: number;
   } | null>(null);
   const [selectedSlotId, setSelectedSlotId] = useState<string | null>(null);
+  const [waitlistDiaDeseadoLabel, setWaitlistDiaDeseadoLabel] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Slots reales traídos de agenda_slots (Supabase) para el servicio/profesional elegido
@@ -200,6 +201,35 @@ export const WebAppointmentWizard: React.FC<Props> = ({
       });
   }, [slotsForPreferencia]);
 
+  // Todos los días hábiles dentro de la ventana de 30 días, tengan o no
+  // disponibilidad real. Los que no tienen cupos se muestran igual (en
+  // naranja) para poder sumarse directo a la lista de espera de ese día.
+  const allCandidateDays = useMemo(() => {
+    const byDate = new Map<string, (typeof eligibleDays)[number]>(eligibleDays.map((d) => [d.date, d]));
+    const list: Array<{ date: string; label: string; shortLabel: string; availableSlotsCount: number }> = [];
+
+    const start = new Date();
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(`${maxBookingDate()}T00:00:00`);
+
+    for (let d = new Date(start); d <= end; d.setDate(d.getDate() + 1)) {
+      const dow = d.getDay();
+      if (dow === 0 || dow === 6) continue; // sin fin de semana
+      const year = d.getFullYear();
+      const month = String(d.getMonth() + 1).padStart(2, '0');
+      const day = String(d.getDate()).padStart(2, '0');
+      const dateStr = `${year}-${month}-${day}`;
+      const existing = byDate.get(dateStr);
+      if (existing) {
+        list.push(existing);
+      } else {
+        const { label, shortLabel } = formatDateLabel(dateStr);
+        list.push({ date: dateStr, label, shortLabel, availableSlotsCount: 0 });
+      }
+    }
+    return list;
+  }, [eligibleDays]);
+
   // Slots disponibles para el día seleccionado
   const availableSlotsForSelectedDate = useMemo(() => {
     if (!fechaSeleccionada) return [];
@@ -270,7 +300,15 @@ export const WebAppointmentWizard: React.FC<Props> = ({
     setFechaSeleccionada(dateStr);
     setHoraSeleccionada(null);
     setSlotProfesionalNombre(null);
+    setWaitlistDiaDeseadoLabel(null);
     setCurrentStep('TURNO');
+  };
+
+  // Día sin cupos: en vez de reservar, se anota directo en lista de espera.
+  const handleSelectDiaSinDisponibilidad = (dateStr: string, dateLabel: string) => {
+    setFechaSeleccionada(dateStr);
+    setWaitlistDiaDeseadoLabel(dateLabel);
+    setCurrentStep('CONFIRMAR_LISTA_ESPERA');
   };
 
   const handleSelectSlot = (slot: AvailableSlot) => {
@@ -927,11 +965,11 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 ¿Qué día te queda mejor?
               </h3>
               <p className="text-xs sm:text-sm text-stone-500">
-                Mostrando únicamente fechas con cupos compatibles dentro de los próximos 30 días.
+                Los días en naranja no tienen cupos: podés anotarte directo en la lista de espera para ese día.
               </p>
             </div>
 
-            {/* Quick selectors: Primer día disponible / Me da igual */}
+            {/* Quick selector: Primer día disponible */}
             {eligibleDays.length > 0 && (
               <div className="flex items-center gap-2">
                 <button
@@ -953,7 +991,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
             <div className="p-6 rounded-2xl bg-rose-50 border border-rose-200 text-rose-800 text-xs font-semibold text-center">
               {slotsError}
             </div>
-          ) : eligibleDays.length === 0 ? (
+          ) : allCandidateDays.length === 0 ? (
             <div className="p-6 rounded-2xl bg-stone-50 border border-stone-200 text-center space-y-4">
               <div className="w-12 h-12 rounded-2xl bg-amber-50 text-amber-800 mx-auto flex items-center justify-center">
                 <AlertTriangle className="w-6 h-6" />
@@ -992,11 +1030,37 @@ export const WebAppointmentWizard: React.FC<Props> = ({
               </div>
             </div>
           ) : (
-            /* Cards / Buttons of available days */
+            /* Cards / Buttons de todos los días (disponibles y sin cupos) */
             <div className="space-y-3">
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {eligibleDays.map((day) => {
+                {allCandidateDays.map((day) => {
                   const isSelected = fechaSeleccionada === day.date;
+                  const tieneCupos = day.availableSlotsCount > 0;
+
+                  if (!tieneCupos) {
+                    return (
+                      <button
+                        key={day.date}
+                        type="button"
+                        onClick={() => handleSelectDiaSinDisponibilidad(day.date, day.label)}
+                        className="p-3.5 rounded-2xl border-2 text-left transition-all flex flex-col justify-between group border-amber-300 bg-amber-50/60 hover:bg-amber-100/70 hover:border-amber-400"
+                      >
+                        <div className="space-y-1">
+                          <span className="text-[11px] font-semibold text-amber-700 block uppercase tracking-wider">
+                            Día {day.shortLabel.split(' ')[0]}
+                          </span>
+                          <h4 className="font-bold text-sm text-amber-900">
+                            {day.shortLabel}
+                          </h4>
+                        </div>
+
+                        <div className="pt-2 mt-2 border-t border-amber-200 flex items-center justify-between text-[11px]">
+                          <span className="text-amber-800 font-bold">Agregar a lista de espera</span>
+                        </div>
+                      </button>
+                    );
+                  }
+
                   return (
                     <button
                       key={day.date}
@@ -1031,7 +1095,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
               <div className="p-3 bg-stone-50 rounded-xl border border-stone-200/80 text-[11px] text-stone-500 flex items-center gap-2">
                 <Info className="w-4 h-4 text-stone-400 shrink-0" />
                 <span>
-                  Los días no mostrados no cuentan con turnos libres o están fuera del límite hospitalario de 30 días.
+                  En verde/blanco: días con cupos reales para reservar. En naranja: sin cupos por ahora, pero podés sumarte a la lista de espera para ese día.
                 </span>
               </div>
             </div>
@@ -1365,6 +1429,7 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 setHoraSeleccionada(null);
                 setSlotProfesionalNombre(null);
                 setConfirmedAppointment(null);
+                setWaitlistDiaDeseadoLabel(null);
                 setCurrentStep('PACIENTE');
               }}
               className="w-full sm:w-auto px-5 py-2.5 rounded-xl border border-stone-300 hover:bg-stone-50 text-stone-700 font-bold text-xs transition-colors"
@@ -1407,6 +1472,12 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 <span className="text-stone-400 block text-[11px]">Servicio:</span>
                 <strong className="text-stone-900 font-bold">{selectedServicio?.nombre}</strong>
               </div>
+              {waitlistDiaDeseadoLabel && (
+                <div>
+                  <span className="text-stone-400 block text-[11px]">Día deseado:</span>
+                  <strong className="text-stone-900 font-bold">{waitlistDiaDeseadoLabel}</strong>
+                </div>
+              )}
               <div>
                 <span className="text-stone-400 block text-[11px]">Preferencia:</span>
                 <strong className="text-stone-900 font-bold capitalize">{preferenciaHoraria || 'Sin preferencia'}</strong>
@@ -1418,6 +1489,11 @@ export const WebAppointmentWizard: React.FC<Props> = ({
                 </strong>
               </div>
             </div>
+            {waitlistDiaDeseadoLabel && (
+              <p className="text-[11px] text-amber-900">
+                No hay cupos disponibles el {waitlistDiaDeseadoLabel.toLowerCase()}. Te vamos a avisar apenas se libere un turno compatible.
+              </p>
+            )}
 
             <p className="text-[11px] text-amber-900 pt-2 border-t border-amber-200/80">
               El hospital gestiona la lista de espera de manera transparente y por orden estricto de solicitud.
@@ -1427,7 +1503,10 @@ export const WebAppointmentWizard: React.FC<Props> = ({
           <div className="flex flex-col sm:flex-row items-center justify-between gap-3 pt-2">
             <button
               type="button"
-              onClick={() => setCurrentStep('DIA')}
+              onClick={() => {
+                setWaitlistDiaDeseadoLabel(null);
+                setCurrentStep('DIA');
+              }}
               className="w-full sm:w-auto px-4 py-2.5 rounded-xl border border-stone-300 text-stone-700 hover:bg-stone-50 text-xs font-bold transition-colors"
             >
               Volver

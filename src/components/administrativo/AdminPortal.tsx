@@ -6,7 +6,6 @@ import {
   CalendarDays,
   Users,
   Clock,
-  MessageSquare,
   BarChart3,
   CalendarCheck,
   CheckCircle2,
@@ -24,19 +23,17 @@ import {
 } from 'lucide-react';
 import { CentralizedAgenda } from './CentralizedAgenda';
 import { WaitlistManagement } from './WaitlistManagement';
-import { MultichannelRequests } from './MultichannelRequests';
 import { ReportsView } from './ReportsView';
 import { PatientsDirectory } from './PatientsDirectory';
 import { NewManualAppointmentModal } from './NewManualAppointmentModal';
 import { Localidad } from '../../types';
 
-type AdminView = 'inicio' | 'agenda' | 'urgencias' | 'turnos' | 'pacientes' | 'lista-espera' | 'solicitudes' | 'reportes';
+type AdminView = 'inicio' | 'agenda' | 'urgencias' | 'turnos' | 'pacientes' | 'lista-espera' | 'reportes';
 
 export const AdminPortal: React.FC = () => {
   const {
     appointments,
     waitlist,
-    inboundRequests,
     doctors,
     urgencies,
     registerUrgency,
@@ -106,7 +103,6 @@ export const AdminPortal: React.FC = () => {
     { key: 'turnos', label: 'Todos los turnos', icon: <CalendarDays className="w-4 h-4" />, badge: appointments.length },
     { key: 'pacientes', label: 'Directorio Pacientes', icon: <Users className="w-4 h-4" /> },
     { key: 'lista-espera', label: 'Lista de Espera', icon: <Clock className="w-4 h-4" />, badge: listaEsperaCount },
-    { key: 'solicitudes', label: 'Canal WhatsApp / Entrantes', icon: <MessageSquare className="w-4 h-4 text-emerald-600" />, badge: inboundRequests.filter((r) => r.estado === 'pendiente').length },
     { key: 'reportes', label: 'Métricas e Impacto', icon: <BarChart3 className="w-4 h-4" /> },
   ];
 
@@ -421,12 +417,6 @@ export const AdminPortal: React.FC = () => {
                     Abrir Agenda Centralizada
                   </button>
                   <button
-                    onClick={() => setActiveView('solicitudes')}
-                    className="px-4 py-2 bg-white/15 text-white font-bold text-xs rounded-xl hover:bg-white/25 transition-colors"
-                  >
-                    Bandeja WhatsApp Multicanal
-                  </button>
-                  <button
                     onClick={() => setActiveView('urgencias')}
                     className="px-4 py-2 bg-rose-600/90 text-white font-bold text-xs rounded-xl hover:bg-rose-700 transition-colors"
                   >
@@ -541,7 +531,6 @@ export const AdminPortal: React.FC = () => {
 
           {activeView === 'lista-espera' && <WaitlistManagement />}
 
-          {activeView === 'solicitudes' && <MultichannelRequests />}
 
           {activeView === 'reportes' && <ReportsView />}
         </main>
