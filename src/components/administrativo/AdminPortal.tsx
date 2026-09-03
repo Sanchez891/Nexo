@@ -20,6 +20,7 @@ import {
   ArrowRight,
   ShieldCheck,
   Check,
+  Info,
 } from 'lucide-react';
 import { CentralizedAgenda } from './CentralizedAgenda';
 import { WaitlistManagement } from './WaitlistManagement';
@@ -46,6 +47,8 @@ export const AdminPortal: React.FC = () => {
 
   const [activeView, setActiveView] = useState<AdminView>('agenda');
   const [showManualModal, setShowManualModal] = useState(false);
+  const [openInfoCard, setOpenInfoCard] = useState<string | null>(null);
+  const toggleInfoCard = (key: string) => setOpenInfoCard((prev) => (prev === key ? null : key));
   const [showUrgencyModal, setShowUrgencyModal] = useState(false);
   const [showDelayModal, setShowDelayModal] = useState(false);
   const [showAbsenceModal, setShowAbsenceModal] = useState(false);
@@ -264,21 +267,52 @@ export const AdminPortal: React.FC = () => {
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-3">
             {/* Situation 1: Delays (real) */}
             {doctorsWithDelay.length === 0 ? (
-              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs text-stone-500">
-                Sin demoras reportadas hoy.
+              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between font-bold text-stone-500">
+                  <span className="inline-flex items-center gap-1">
+                    Demoras
+                    <button
+                      type="button"
+                      onClick={() => toggleInfoCard('demoras')}
+                      className="text-stone-400 hover:text-teal-700 transition-colors"
+                      title="¿Qué hace este módulo?"
+                    >
+                      <Info className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                </div>
+                {openInfoCard === 'demoras' && (
+                  <p className="text-stone-600 text-[11px] leading-tight bg-white/70 rounded-lg p-2 border border-stone-200">
+                    Muestra si algún profesional reportó una demora hoy. Se refleja automáticamente en el portal familiar y en la sala de espera.
+                  </p>
+                )}
+                <p className="text-stone-500">Sin demoras reportadas hoy.</p>
               </div>
             ) : (
               doctorsWithDelay.slice(0, 1).map((d) => (
                 <div key={d.id} className="bg-amber-50/80 p-3 rounded-xl border border-amber-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between font-bold text-amber-900">
-                    <span>{d.nombre}</span>
+                    <span className="inline-flex items-center gap-1">
+                      {d.nombre}
+                      <button
+                        type="button"
+                        onClick={() => toggleInfoCard('demoras')}
+                        className="text-amber-700/70 hover:text-amber-900 transition-colors"
+                        title="¿Qué hace este módulo?"
+                      >
+                        <Info className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
                     <span className="bg-amber-200/80 text-amber-950 px-2 py-0.5 rounded-md text-[10px]">
                       Demora: {d.demoraMinutos} min
                     </span>
                   </div>
-                  <p className="text-stone-600 text-[11px] leading-tight">
-                    {d.especialidad} • Notificado en sala y portal familiar.
-                  </p>
+                  {openInfoCard === 'demoras' && (
+                    <p className="text-stone-600 text-[11px] leading-tight bg-white/70 rounded-lg p-2 border border-amber-200">
+                      Muestra si algún profesional reportó una demora hoy. Los pacientes con turno ese día lo ven reflejado automáticamente en el portal familiar y en la sala de espera.
+                    </p>
+                  )}
+                  <p className="text-stone-600 text-[11px] leading-tight">{d.especialidad}</p>
                   <button
                     onClick={() => setShowDelayModal(true)}
                     className="text-[11px] font-bold text-amber-900 hover:underline pt-1 inline-flex items-center gap-1"
@@ -292,14 +326,26 @@ export const AdminPortal: React.FC = () => {
             {/* Situation 2: Lista de espera con candidatos (real) */}
             <div className="bg-teal-50/80 p-3 rounded-xl border border-teal-200 text-xs space-y-1.5">
               <div className="flex items-center justify-between font-bold text-teal-950">
-                <span>Lista de espera activa</span>
+                <span className="inline-flex items-center gap-1">
+                  Lista de espera activa
+                  <button
+                    type="button"
+                    onClick={() => toggleInfoCard('lista-espera')}
+                    className="text-teal-700/70 hover:text-teal-900 transition-colors"
+                    title="¿Qué hace este módulo?"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </span>
                 <span className="bg-teal-200/80 text-teal-950 px-2 py-0.5 rounded-md text-[10px]">
                   {listaEsperaCount} en espera
                 </span>
               </div>
-              <p className="text-stone-600 text-[11px] leading-tight">
-                Al cancelar un turno, el sistema busca automáticamente candidatos compatibles.
-              </p>
+              {openInfoCard === 'lista-espera' && (
+                <p className="text-stone-600 text-[11px] leading-tight bg-white/70 rounded-lg p-2 border border-teal-200">
+                  Pacientes anotados a la espera de un cupo. Al cancelarse un turno, el sistema busca automáticamente candidatos compatibles (mismo servicio, profesional preferido, antigüedad) para que puedas asignarles el lugar liberado.
+                </p>
+              )}
               <button
                 onClick={() => setActiveView('lista-espera')}
                 className="text-[11px] font-bold text-teal-800 hover:underline pt-1 inline-flex items-center gap-1"
@@ -311,14 +357,26 @@ export const AdminPortal: React.FC = () => {
             {/* Situation 3: Turnos en espera de sala hoy (real) */}
             <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs space-y-1.5">
               <div className="flex items-center justify-between font-bold text-stone-900">
-                <span>Sala de espera hoy</span>
+                <span className="inline-flex items-center gap-1">
+                  Sala de espera hoy
+                  <button
+                    type="button"
+                    onClick={() => toggleInfoCard('sala-espera')}
+                    className="text-stone-400 hover:text-teal-700 transition-colors"
+                    title="¿Qué hace este módulo?"
+                  >
+                    <Info className="w-3.5 h-3.5" />
+                  </button>
+                </span>
                 <span className="bg-stone-200 text-stone-800 px-2 py-0.5 rounded-md text-[10px]">
                   {enEsperaCount} pacientes
                 </span>
               </div>
-              <p className="text-stone-600 text-[11px] leading-tight">
-                Pacientes con check-in registrado esperando ser llamados a consultorio.
-              </p>
+              {openInfoCard === 'sala-espera' && (
+                <p className="text-stone-600 text-[11px] leading-tight bg-white rounded-lg p-2 border border-stone-200">
+                  Pacientes que ya hicieron check-in en la Agenda Centralizada y están esperando ser llamados a consultorio hoy.
+                </p>
+              )}
               <button
                 onClick={() => setActiveView('agenda')}
                 className="text-[11px] font-bold text-stone-700 hover:underline pt-1 inline-flex items-center gap-1"
@@ -329,21 +387,52 @@ export const AdminPortal: React.FC = () => {
 
             {/* Situation 4: Absences (real) */}
             {absentDoctors.length === 0 ? (
-              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs text-stone-500">
-                Sin ausencias reportadas hoy.
+              <div className="bg-stone-50 p-3 rounded-xl border border-stone-200 text-xs space-y-1.5">
+                <div className="flex items-center justify-between font-bold text-stone-500">
+                  <span className="inline-flex items-center gap-1">
+                    Ausencias
+                    <button
+                      type="button"
+                      onClick={() => toggleInfoCard('ausencias')}
+                      className="text-stone-400 hover:text-teal-700 transition-colors"
+                      title="¿Qué hace este módulo?"
+                    >
+                      <Info className="w-3.5 h-3.5" />
+                    </button>
+                  </span>
+                </div>
+                {openInfoCard === 'ausencias' && (
+                  <p className="text-stone-600 text-[11px] leading-tight bg-white/70 rounded-lg p-2 border border-stone-200">
+                    Profesionales ausentes hoy. Podés ver los turnos afectados y reubicarlos a otro profesional del mismo servicio si hay un horario libre equivalente.
+                  </p>
+                )}
+                <p className="text-stone-500">Sin ausencias reportadas hoy.</p>
               </div>
             ) : (
               absentDoctors.slice(0, 1).map((d) => (
                 <div key={d.id} className="bg-rose-50/70 p-3 rounded-xl border border-rose-200 text-xs space-y-1.5">
                   <div className="flex items-center justify-between font-bold text-rose-900">
-                    <span>{d.nombre} (Ausente)</span>
+                    <span className="inline-flex items-center gap-1">
+                      {d.nombre} (Ausente)
+                      <button
+                        type="button"
+                        onClick={() => toggleInfoCard('ausencias')}
+                        className="text-rose-700/70 hover:text-rose-900 transition-colors"
+                        title="¿Qué hace este módulo?"
+                      >
+                        <Info className="w-3.5 h-3.5" />
+                      </button>
+                    </span>
                     <span className="bg-rose-200/80 text-rose-950 px-2 py-0.5 rounded-md text-[10px]">
                       {d.motivoAusencia || 'Licencia médica'}
                     </span>
                   </div>
-                  <p className="text-stone-600 text-[11px] leading-tight">
-                    {d.especialidad} • Reubicá manualmente los turnos afectados.
-                  </p>
+                  {openInfoCard === 'ausencias' && (
+                    <p className="text-stone-600 text-[11px] leading-tight bg-white/70 rounded-lg p-2 border border-rose-200">
+                      Profesionales ausentes hoy. Podés ver los turnos afectados y reubicarlos a otro profesional del mismo servicio si hay un horario libre equivalente.
+                    </p>
+                  )}
+                  <p className="text-stone-600 text-[11px] leading-tight">{d.especialidad}</p>
                   <button
                     onClick={() => {
                       setSelectedDoctorAbsence(d.id);
