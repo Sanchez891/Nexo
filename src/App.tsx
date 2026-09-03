@@ -84,7 +84,7 @@ const HospitalAppContent: React.FC = () => {
             </div>
             <div>
               <div className="text-stone-200 font-bold text-sm">
-                Hospital Pediátrico Juan Pablo II
+                Nexo-Hospital Pediátrico Juan Pablo II
               </div>
               <div className="text-[11px] text-stone-400">
                 Avenida Artigas 1435 • Ciudad de Corrientes, Argentina • Exclusivamente Pediátrico (1 mes a 15 años)
