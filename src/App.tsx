@@ -7,7 +7,7 @@ import { DoctorPortal } from './components/medico/DoctorPortal';
 import { AsistenteSocialPortal } from './components/social/AsistenteSocialPortal';
 import { DirectivoSettings } from './components/directivo/DirectivoSettings';
 import { WhatsAppSimulator } from './components/whatsapp/WhatsAppSimulator';
-import { Building2, Loader2, AlertTriangle } from 'lucide-react';
+import { Loader2, AlertTriangle } from 'lucide-react';
 import { isSupabaseConfigured } from './lib/supabase';
 
 const HospitalAppContent: React.FC = () => {
@@ -79,8 +79,8 @@ const HospitalAppContent: React.FC = () => {
       <footer className="bg-stone-900 text-stone-400 text-xs py-8 border-t border-stone-800 mt-auto">
         <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="w-8 h-8 rounded-lg bg-teal-700 text-white flex items-center justify-center font-bold shadow-xs">
-              <Building2 className="w-4 h-4" />
+            <div className="w-8 h-8 rounded-lg bg-white flex items-center justify-center shadow-xs shrink-0 overflow-hidden">
+              <img src="/nexo-logo.png" alt="Nexo" className="w-full h-full object-contain scale-125" />
             </div>
             <div>
               <div className="text-stone-200 font-bold text-sm">

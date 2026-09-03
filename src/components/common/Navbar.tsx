@@ -2,7 +2,6 @@ import React, { useState } from 'react';
 import { useHospital } from '../../context/HospitalContext';
 import { UserRole } from '../../types';
 import {
-  Heart,
   User,
   ClipboardList,
   Stethoscope,
@@ -61,8 +60,8 @@ export const Navbar: React.FC = () => {
           <div className="flex flex-col md:flex-row md:items-center md:justify-between py-3 gap-3 border-b border-stone-100">
             {/* Hospital Branding */}
             <div className="flex items-center gap-3">
-              <div className="w-11 h-11 rounded-xl bg-gradient-to-br from-teal-700 to-emerald-800 flex items-center justify-center text-white shadow-xs ring-2 ring-teal-100">
-                <Heart className="w-6 h-6 fill-white/20" />
+              <div className="w-12 h-12 rounded-xl bg-white flex items-center justify-center shadow-xs ring-2 ring-teal-100 shrink-0 overflow-hidden">
+                <img src="/nexo-logo.png" alt="Nexo" className="w-full h-full object-contain scale-125" />
               </div>
               <div>
                 <div className="flex items-center gap-2">
