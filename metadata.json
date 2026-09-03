@@ -1,0 +1,6 @@
+{
+  "name": "Hospital Pediátrico Juan Pablo II - Gestión de Turnos",
+  "description": "Sistema centralizado y multicanal de gestión de turnos para el Hospital Pediátrico Juan Pablo II de Corrientes, con optimización para familias del interior y lista de espera inteligente.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
