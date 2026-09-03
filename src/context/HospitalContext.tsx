@@ -153,6 +153,7 @@ interface HospitalContextType {
 
   addSpecialty: (specialty: { nombre: string; descripcion?: string; tipoAgenda: TipoAgenda }) => Promise<void>;
   updateSpecialty: (specialty: Specialty) => Promise<void>;
+  addProfessional: (data: { nombre: string; apellido: string; matricula?: string; servicioIds: string[] }) => Promise<void>;
 
   resetDemoData: () => Promise<void>;
 }
@@ -644,6 +645,11 @@ export const HospitalProvider: React.FC<{ children: React.ReactNode }> = ({ chil
     setSpecialties(specs);
   };
 
+  const addProfessional: HospitalContextType['addProfessional'] = async (data) => {
+    await professionalsService.createProfesional(data);
+    await refreshDoctors();
+  };
+
   const resetDemoData = async () => {
     setCurrentDemoStep(1);
     setReleasedSlotAlert(null);
@@ -706,6 +712,7 @@ export const HospitalProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         registerPatient,
         addSpecialty,
         updateSpecialty,
+        addProfessional,
         resetDemoData,
       }}
     >

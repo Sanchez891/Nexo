@@ -51,6 +51,28 @@ export async function getProfesionales(): Promise<Doctor[]> {
     }));
 }
 
+/** Crea un profesional nuevo y lo vincula a uno o más servicios. */
+export async function createProfesional(data: {
+  nombre: string;
+  apellido: string;
+  matricula?: string;
+  servicioIds: string[];
+}): Promise<void> {
+  const { data: row, error } = await supabase
+    .from('profesionales')
+    .insert({ nombre: data.nombre, apellido: data.apellido, matricula: data.matricula || null })
+    .select('id')
+    .single();
+  if (error) throw error;
+
+  if (data.servicioIds.length > 0) {
+    const { error: linkError } = await supabase
+      .from('profesional_servicio')
+      .insert(data.servicioIds.map((servicioId) => ({ profesional_id: row.id, servicio_id: servicioId, activo: true })));
+    if (linkError) throw linkError;
+  }
+}
+
 /** Extrae el profesional_id "real" (UUID de la tabla profesionales) desde un id
  * compuesto "profesionalId::servicioId" usado en el Doctor mapeado. */
 export function realProfesionalId(doctorId: string): string {
